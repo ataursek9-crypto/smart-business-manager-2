@@ -18,7 +18,9 @@ import java.util.UUID
 import com.example.data.storage.SavedAccount
 import com.example.data.storage.SavedAccountManager
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import com.example.data.sync.CloudBusinessAuth
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
@@ -115,12 +117,54 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
                 val user = _currentUser.value
 
+                // Verify admin authorization: confirm this user is pre-registered by the admin
+                var isAuthorized = false
+                var authorizedName = user?.name ?: fUser.displayName ?: "সেলস প্রতিনিধি"
+                var authorizedPhone = user?.phone ?: fUser.phoneNumber ?: ""
+
+                // 1. Check existing staff doc in Firestore
+                val existingStaffDoc = firestore.collection("businesses").document(cleanBizId).collection("staff").document(fUser.uid).get().await()
+                if (existingStaffDoc.exists() && (existingStaffDoc.getBoolean("isActive") == true)) {
+                    isAuthorized = true
+                    authorizedName = existingStaffDoc.getString("name") ?: authorizedName
+                    authorizedPhone = existingStaffDoc.getString("phone") ?: authorizedPhone
+                }
+
+                // 2. Check staff_by_email
+                if (!isAuthorized && !fUser.email.isNullOrBlank()) {
+                    val staffEmailDoc = firestore.collection("businesses").document(cleanBizId).collection("staff_by_email").document(fUser.email!!.trim().lowercase()).get().await()
+                    if (staffEmailDoc.exists() && (staffEmailDoc.getBoolean("isActive") == true)) {
+                        isAuthorized = true
+                        authorizedName = staffEmailDoc.getString("name") ?: authorizedName
+                        authorizedPhone = staffEmailDoc.getString("phone") ?: authorizedPhone
+                    }
+                }
+
+                // 3. Check staff_by_phone
+                if (!isAuthorized && authorizedPhone.isNotBlank()) {
+                    val staffPhoneDoc = firestore.collection("businesses").document(cleanBizId).collection("staff_by_phone").document(authorizedPhone.trim()).get().await()
+                    if (staffPhoneDoc.exists() && (staffPhoneDoc.getBoolean("isActive") == true)) {
+                        isAuthorized = true
+                        authorizedName = staffPhoneDoc.getString("name") ?: authorizedName
+                    }
+                }
+
+                // 4. Check if authenticated user is the business owner
+                if (!isAuthorized && fUser.uid == cleanBizId) {
+                    isAuthorized = true
+                }
+
+                if (!isAuthorized) {
+                    onResult(false, "অননুমোদিত স্টাফ: অ্যাডমিন কর্তৃক এই অ্যাকাউন্টের কোনো সক্রিয় স্টাফ অনুমোদন পাওয়া যায়নি। অ্যাডমিনকে আপনার ফোন বা ইমেইল যুক্ত করতে বলুন।")
+                    return@launch
+                }
+
                 // 1. Write/Link active staff profile in Firestore under this business
                 val staffDocRef = firestore.collection("businesses").document(cleanBizId).collection("staff").document(fUser.uid)
                 val staffData = mapOf(
                     "id" to fUser.uid,
-                    "name" to (user?.name ?: fUser.displayName ?: "সেলস প্রতিনিধি"),
-                    "phone" to (user?.phone ?: ""),
+                    "name" to authorizedName,
+                    "phone" to authorizedPhone,
                     "email" to (fUser.email ?: ""),
                     "role" to UserRole.SALESMAN.name,
                     "isActive" to true,
@@ -846,34 +890,38 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
             // 4. Check if this Google user has a registered staff membership in Firestore
             try {
-                val firestore = FirebaseFirestore.getInstance()
-                val memberDoc = firestore.collection("staff_memberships").document(uid).get().await()
-                if (memberDoc.exists()) {
-                    val bizId = memberDoc.getString("businessId")
-                    val roleStr = memberDoc.getString("role")
-                    val isActive = memberDoc.getBoolean("isActive") ?: false
-                    if (!bizId.isNullOrBlank() && isActive) {
-                        val role = if (roleStr == "ADMIN") UserRole.ADMIN else UserRole.SALESMAN
-                        val staffUser = User(
-                            id = uid,
-                            name = name,
-                            phone = phone.ifBlank { "01800000000" },
-                            role = role,
-                            pinHash = repository.hashPin("1234"),
-                            isActive = true,
-                            accountStatus = UserAccountStatus.ACTIVE
-                        )
-                        repository.saveUserDirect(staffUser)
-                        CloudBusinessAuth.setStoredBusinessId(
-                            context = getApplication(),
-                            businessId = bizId,
-                            role = role.name
-                        )
-                        _activeBusinessId.value = bizId
-                        _currentUser.value = staffUser
-                        triggerSync()
-                        onResult(true, "স্বাগতম, ${staffUser.name}!", role)
-                        return@launch
+                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                    val firestore = FirebaseFirestore.getInstance()
+                    val memberDoc = withTimeoutOrNull(2500L) {
+                        firestore.collection("staff_memberships").document(uid).get().await()
+                    }
+                    if (memberDoc != null && memberDoc.exists()) {
+                        val bizId = memberDoc.getString("businessId")
+                        val roleStr = memberDoc.getString("role")
+                        val isActive = memberDoc.getBoolean("isActive") ?: false
+                        if (!bizId.isNullOrBlank() && isActive) {
+                            val role = if (roleStr == "ADMIN") UserRole.ADMIN else UserRole.SALESMAN
+                            val staffUser = User(
+                                id = uid,
+                                name = name,
+                                phone = phone.ifBlank { "01800000000" },
+                                role = role,
+                                pinHash = repository.hashPin("1234"),
+                                isActive = true,
+                                accountStatus = UserAccountStatus.ACTIVE
+                            )
+                            repository.saveUserDirect(staffUser)
+                            CloudBusinessAuth.setStoredBusinessId(
+                                context = getApplication(),
+                                businessId = bizId,
+                                role = role.name
+                            )
+                            _activeBusinessId.value = bizId
+                            _currentUser.value = staffUser
+                            triggerSync()
+                            onResult(true, "স্বাগতম, ${staffUser.name}!", role)
+                            return@launch
+                        }
                     }
                 }
             } catch (_: Exception) {}
@@ -1273,6 +1321,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.adjustStockManual(productId, delta, reason, user)
             _toastMessage.emit("স্টক সমন্বয় সম্পন্ন হয়েছে")
+            syncManager.triggerSync()
             onDone()
         }
     }
@@ -1283,6 +1332,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.updateSettings(settings, user)
             _toastMessage.emit("ব্যবসার সেটিংস সফলভাবে আপডেট হয়েছে")
+            syncManager.triggerSync()
         }
     }
 
@@ -1292,6 +1342,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.saveUser(user, current)
             _toastMessage.emit("ব্যবহারকারী সংরক্ষিত হয়েছে")
+            syncManager.triggerSync()
             onDone()
         }
     }
@@ -1318,6 +1369,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             )
             repository.saveUser(newUser, current)
             _toastMessage.emit("নতুন সেলসম্যান সফলভাবে তৈরি হয়েছে")
+            syncManager.triggerSync()
             onDone()
         }
     }
@@ -1525,6 +1577,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             try {
                 val approved = repository.approveProductSubmission(submissionId, finalData, admin)
                 _toastMessage.emit("'${approved.name}' সফলভাবে অনুমোদিত এবং মূল ইনভেন্টরিতে যুক্ত হয়েছে")
+                syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
                 onError(e.message ?: "প্রোডাক্ট অনুমোদন ব্যর্থ হয়েছে")

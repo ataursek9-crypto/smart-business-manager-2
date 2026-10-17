@@ -512,6 +512,65 @@ class CloudSyncManager(
         }
     }
 
+    suspend fun applyRemoteProductMap(data: Map<String, Any?>, isSalesman: Boolean) {
+        val id = data["id"] as? String ?: return
+        val tombstone = db.recycleBinDao().getItemByOriginalId("products", id)
+        if (tombstone != null && !tombstone.isRestored) {
+            return
+        }
+
+        val name = data["name"] as? String ?: return
+        val sku = data["sku"] as? String ?: ""
+        val barcode = data["barcode"] as? String ?: ""
+        val category = data["category"] as? String ?: "সাধারণ"
+        val sellingPrice = (data["sellingPrice"] as? Number)?.toDouble() ?: 0.0
+        val currentStock = (data["currentStock"] as? Number)?.toDouble() ?: 0.0
+        val alertStockLevel = (data["alertStockLevel"] as? Number)?.toDouble() ?: 5.0
+        val unit = data["unit"] as? String ?: "পিস"
+        val isActive = data["isActive"] as? Boolean ?: true
+        val updatedAt = (data["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val remotePurchasePrice = (data["purchasePrice"] as? Number)?.toDouble()
+
+        val localProduct = db.productDao().getProductById(id)
+        if (localProduct != null) {
+            // Last-write-wins by timestamp
+            if (updatedAt >= localProduct.updatedAt) {
+                val merged = localProduct.copy(
+                    name = name,
+                    sku = sku,
+                    barcode = barcode,
+                    category = category,
+                    sellingPrice = sellingPrice,
+                    currentStock = currentStock,
+                    alertStockLevel = alertStockLevel,
+                    unit = unit,
+                    isActive = isActive,
+                    updatedAt = updatedAt,
+                    // Purchase price protection: salesman never overwrites or gets exposed to purchase cost
+                    purchasePrice = if (isSalesman) (localProduct.purchasePrice.takeIf { it > 0 } ?: 0.0) else (remotePurchasePrice ?: localProduct.purchasePrice)
+                )
+                db.productDao().updateProduct(merged)
+            }
+        } else {
+            val newProduct = Product(
+                id = id,
+                name = name,
+                sku = sku,
+                barcode = barcode,
+                category = category,
+                purchasePrice = if (isSalesman) 0.0 else (remotePurchasePrice ?: 0.0),
+                sellingPrice = sellingPrice,
+                currentStock = currentStock,
+                alertStockLevel = alertStockLevel,
+                unit = unit,
+                isActive = isActive,
+                updatedAt = updatedAt,
+                isTestData = false
+            )
+            db.productDao().insertProduct(newProduct)
+        }
+    }
+
     private suspend fun syncProducts(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("products")
 
@@ -527,63 +586,9 @@ class CloudSyncManager(
         // 2. Download and merge remote products: BOTH ADMIN AND SALESMAN DOWNLOAD
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
-            val id = doc.getString("id") ?: doc.id
-            // Check tombstone: if deleted, do not resurrect
-            val tombstone = db.recycleBinDao().getItemByOriginalId("products", id)
-            if (tombstone != null && !tombstone.isRestored) {
-                continue
-            }
-
-            val name = doc.getString("name") ?: continue
-            val sku = doc.getString("sku") ?: ""
-            val barcode = doc.getString("barcode") ?: ""
-            val category = doc.getString("category") ?: "সাধারণ"
-            val sellingPrice = (doc.get("sellingPrice") as? Number)?.toDouble() ?: doc.getDouble("sellingPrice") ?: 0.0
-            val currentStock = (doc.get("currentStock") as? Number)?.toDouble() ?: doc.getDouble("currentStock") ?: 0.0
-            val alertStockLevel = (doc.get("alertStockLevel") as? Number)?.toDouble() ?: doc.getDouble("alertStockLevel") ?: 5.0
-            val unit = doc.getString("unit") ?: "পিস"
-            val isActive = doc.getBoolean("isActive") ?: true
-            val updatedAt = (doc.get("updatedAt") as? Number)?.toLong() ?: doc.getLong("updatedAt") ?: System.currentTimeMillis()
-            val remotePurchasePrice = (doc.get("purchasePrice") as? Number)?.toDouble() ?: doc.getDouble("purchasePrice")
-
-            val localProduct = db.productDao().getProductById(id)
-            if (localProduct != null) {
-                // Last-write-wins by timestamp
-                if (updatedAt >= localProduct.updatedAt) {
-                    val merged = localProduct.copy(
-                        name = name,
-                        sku = sku,
-                        barcode = barcode,
-                        category = category,
-                        sellingPrice = sellingPrice,
-                        currentStock = currentStock,
-                        alertStockLevel = alertStockLevel,
-                        unit = unit,
-                        isActive = isActive,
-                        updatedAt = updatedAt,
-                        // Purchase price protection: salesman never overwrites or gets exposed to purchase cost
-                        purchasePrice = if (isSalesman) (localProduct.purchasePrice.takeIf { it > 0 } ?: 0.0) else (remotePurchasePrice ?: localProduct.purchasePrice)
-                    )
-                    db.productDao().updateProduct(merged)
-                }
-            } else {
-                val newProduct = Product(
-                    id = id,
-                    name = name,
-                    sku = sku,
-                    barcode = barcode,
-                    category = category,
-                    purchasePrice = if (isSalesman) 0.0 else (remotePurchasePrice ?: 0.0),
-                    sellingPrice = sellingPrice,
-                    currentStock = currentStock,
-                    alertStockLevel = alertStockLevel,
-                    unit = unit,
-                    isActive = isActive,
-                    updatedAt = updatedAt,
-                    isTestData = false
-                )
-                db.productDao().insertProduct(newProduct)
-            }
+            val data = doc.data?.toMutableMap() ?: mutableMapOf()
+            if (!data.containsKey("id")) data["id"] = doc.id
+            applyRemoteProductMap(data, isSalesman)
         }
     }
 

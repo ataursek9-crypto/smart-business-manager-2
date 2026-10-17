@@ -148,7 +148,7 @@ service cloud.firestore {
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 7. Staff Members - Owner manages staff accounts, staff can read own profile & link verified staff account
+      // 7. Staff Members - Owner manages staff accounts, pre-registered staff can link account
       match /staff/{staffUid} {
         allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid);
         allow list: if isBusinessOwner(businessId) || isBusinessStaff(businessId);
@@ -156,7 +156,15 @@ service cloud.firestore {
           isSignedIn() && request.auth.uid == staffUid &&
           incoming().isActive == true &&
           incoming().role == 'SALESMAN' &&
-          incoming().businessId == businessId
+          incoming().businessId == businessId &&
+          (
+            (request.auth.token.email != null &&
+             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)) &&
+             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true) ||
+            (incoming().phone is string &&
+             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)) &&
+             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true)
+          )
         );
         allow delete: if isBusinessOwner(businessId);
       }
@@ -179,10 +187,9 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && (
         (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
         (request.auth.uid == userId && incoming().businessId is string &&
-         incoming().role == 'SALESMAN' && incoming().isActive == true) ||
-        (request.auth.uid == userId && incoming().businessId is string &&
-         (exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) ||
-          request.auth.uid == incoming().businessId))
+         incoming().role == 'SALESMAN' && incoming().isActive == true &&
+         exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)).data.isActive == true)
       );
       allow delete: if isSignedIn() && (
         request.auth.uid == userId ||
