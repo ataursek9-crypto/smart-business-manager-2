@@ -1,0 +1,153 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Business ownership / staff helper
+    function isBusinessOwner(businessId) {
+      return isSignedIn() && request.auth.uid == businessId;
+    }
+
+    function isBusinessStaff(businessId) {
+      return isSignedIn() && (
+        request.auth.uid == businessId ||
+        (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true)
+      );
+    }
+
+    // Validation blueprints
+    function isValidProduct(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.category is string && data.category.size() <= 100 &&
+             data.sellingPrice is number && data.sellingPrice >= 0 &&
+             data.currentStock is number &&
+             (!('purchasePrice' in data) || data.purchasePrice is number) &&
+             (!('unit' in data) || (data.unit is string && data.unit.size() <= 50)) &&
+             (!('isActive' in data) || data.isActive is bool) &&
+             (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidCustomer(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.phone is string && data.phone.size() <= 30 &&
+             data.currentDue is number &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 300)) &&
+             (!('totalBilled' in data) || data.totalBilled is number) &&
+             (!('totalPaid' in data) || data.totalPaid is number) &&
+             (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidSale(data) {
+      return data.invoiceNumber is string && data.invoiceNumber.size() <= 128 &&
+             data.customerId is string && data.customerId.size() <= 128 &&
+             data.salesmanId is string && data.salesmanId.size() <= 128 &&
+             data.totalAmount is number && data.totalAmount >= 0 &&
+             (!('paidAmount' in data) || (data.paidAmount is number && data.paidAmount >= 0)) &&
+             (!('dueAmount' in data) || data.dueAmount is number) &&
+             (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidReceipt(data) {
+      return data.receiptNumber is string && data.receiptNumber.size() <= 128 &&
+             data.customerId is string && data.customerId.size() <= 128 &&
+             data.amount is number && data.amount > 0 &&
+             (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidExpense(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.amount is number && data.amount > 0 &&
+             data.category is string && data.category.size() <= 50 &&
+             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'REJECTED'])) &&
+             (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidTombstone(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.tableName is string && data.tableName.size() <= 50 &&
+             data.originalId is string && data.originalId.size() <= 128 &&
+             (!('isPermanent' in data) || data.isPermanent is bool);
+    }
+
+    // Business Scope Root
+    match /businesses/{businessId} {
+      allow get: if isBusinessStaff(businessId);
+      allow create, update, delete: if isBusinessOwner(businessId);
+
+      // 1. Products
+      match /products/{productId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create, update: if isBusinessOwner(businessId) && isValidProduct(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 2. Customers
+      match /customers/{customerId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create, update: if isBusinessStaff(businessId) && isValidCustomer(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 3. Sales (Invoices) - Staff can create, only Owner can delete
+      match /sales/{invoiceNumber} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidSale(incoming());
+        allow update: if isBusinessOwner(businessId) && isValidSale(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 4. Payment Receipts - Staff can collect, only Owner can delete
+      match /payments/{receiptNumber} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidReceipt(incoming());
+        allow update: if isBusinessOwner(businessId) && isValidReceipt(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 5. Expenses - Staff can submit, only Owner can approve or delete
+      match /expenses/{expenseId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidExpense(incoming());
+        allow update: if isBusinessOwner(businessId) && isValidExpense(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 6. Tombstones - Prevents cross-device resurrection of deleted records
+      match /tombstones/{tombstoneId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create, update: if isBusinessOwner(businessId) && isValidTombstone(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 7. Staff Members - Owner manages staff accounts, staff can read own profile
+      match /staff/{staffUid} {
+        allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid);
+        allow list: if isBusinessOwner(businessId);
+        allow create, update, delete: if isBusinessOwner(businessId);
+      }
+    }
+  }
+}

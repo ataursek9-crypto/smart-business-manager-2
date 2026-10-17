@@ -1,0 +1,6 @@
+{
+  "name": "Smart Business Manager",
+  "description": "বাংলা ভাষাভিত্তিক আধুনিক ব্যবসায়িক হিসাব, বিক্রি, স্টক, খরচ ও লাভ-ক্ষতি ব্যবস্থাপনা অ্যাপ",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
