@@ -212,6 +212,7 @@ fun AdminDashboardScreen(
                                     tint = AccentAmber
                                 )
                             }
+                        }
                     }
 
                     if (activeBizId.isNotBlank()) {

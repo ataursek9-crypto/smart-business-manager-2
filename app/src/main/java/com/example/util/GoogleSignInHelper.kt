@@ -38,10 +38,10 @@ object GoogleSignInHelper {
 
     fun getWebClientId(context: Context): String? {
         return try {
-            context.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
             val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
             if (resId != 0) context.getString(resId) else null
+        } catch (_: Exception) {
+            null
         }
     }
 

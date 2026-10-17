@@ -156,45 +156,6 @@ class CloudSyncManager(
         }
     }
 
-/**
- * Manages device-local storage of the verified multi-tenant business identity.
- * Prevents hardcoding or fallback IDs, while ensuring salesmen on separate devices
- * resolve to the exact business authorized by the owner.
- */
-object CloudBusinessAuth {
-    private const val PREFS_NAME = "smart_biz_cloud_auth_prefs"
-    private const val KEY_BUSINESS_ID = "active_cloud_business_id"
-    private const val KEY_BUSINESS_NAME = "active_cloud_business_name"
-    private const val KEY_USER_ROLE = "active_cloud_user_role"
-
-    fun getStoredBusinessId(context: Context): String? {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_BUSINESS_ID, null)?.trim()?.ifBlank { null }
-    }
-
-    fun getStoredRole(context: Context): String? {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_USER_ROLE, null)?.trim()?.ifBlank { null }
-    }
-
-    fun getStoredBusinessName(context: Context): String? {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_BUSINESS_NAME, null)?.trim()?.ifBlank { null }
-    }
-
-    fun setStoredBusinessId(context: Context, businessId: String, businessName: String? = null, role: String? = null) {
-        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-        editor.putString(KEY_BUSINESS_ID, businessId.trim())
-        if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
-        if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
-        editor.apply()
-    }
-
-    fun clear(context: Context) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
-    }
-}
-
     private val scope = CoroutineScope(Dispatchers.IO)
     private val _syncState = MutableStateFlow(
         SyncState(
@@ -577,13 +538,13 @@ object CloudBusinessAuth {
             val sku = doc.getString("sku") ?: ""
             val barcode = doc.getString("barcode") ?: ""
             val category = doc.getString("category") ?: "সাধারণ"
-            val sellingPrice = doc.getDouble("sellingPrice") ?: 0.0
-            val currentStock = doc.getDouble("currentStock") ?: 0.0
-            val alertStockLevel = doc.getDouble("alertStockLevel") ?: 5.0
+            val sellingPrice = (doc.get("sellingPrice") as? Number)?.toDouble() ?: doc.getDouble("sellingPrice") ?: 0.0
+            val currentStock = (doc.get("currentStock") as? Number)?.toDouble() ?: doc.getDouble("currentStock") ?: 0.0
+            val alertStockLevel = (doc.get("alertStockLevel") as? Number)?.toDouble() ?: doc.getDouble("alertStockLevel") ?: 5.0
             val unit = doc.getString("unit") ?: "পিস"
             val isActive = doc.getBoolean("isActive") ?: true
-            val updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
-            val remotePurchasePrice = doc.getDouble("purchasePrice")
+            val updatedAt = (doc.get("updatedAt") as? Number)?.toLong() ?: doc.getLong("updatedAt") ?: System.currentTimeMillis()
+            val remotePurchasePrice = (doc.get("purchasePrice") as? Number)?.toDouble() ?: doc.getDouble("purchasePrice")
 
             val localProduct = db.productDao().getProductById(id)
             if (localProduct != null) {
@@ -622,6 +583,7 @@ object CloudBusinessAuth {
                     isTestData = false
                 )
                 db.productDao().insertProduct(newProduct)
+            }
         }
     }
 
@@ -901,3 +863,43 @@ object CloudBusinessAuth {
         Log.d(TAG, "Recorded persistent deletion tombstone for $originalTable #$originalId")
     }
 }
+
+/**
+ * Manages device-local storage of the verified multi-tenant business identity.
+ * Prevents hardcoding or fallback IDs, while ensuring salesmen on separate devices
+ * resolve to the exact business authorized by the owner.
+ */
+object CloudBusinessAuth {
+    private const val PREFS_NAME = "smart_biz_cloud_auth_prefs"
+    private const val KEY_BUSINESS_ID = "active_cloud_business_id"
+    private const val KEY_BUSINESS_NAME = "active_cloud_business_name"
+    private const val KEY_USER_ROLE = "active_cloud_user_role"
+
+    fun getStoredBusinessId(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_BUSINESS_ID, null)?.trim()?.ifBlank { null }
+    }
+
+    fun getStoredRole(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_USER_ROLE, null)?.trim()?.ifBlank { null }
+    }
+
+    fun getStoredBusinessName(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_BUSINESS_NAME, null)?.trim()?.ifBlank { null }
+    }
+
+    fun setStoredBusinessId(context: Context, businessId: String, businessName: String? = null, role: String? = null) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        editor.putString(KEY_BUSINESS_ID, businessId.trim())
+        if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
+        if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
+        editor.apply()
+    }
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+    }
+}
+

@@ -151,7 +151,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 _activeBusinessId.value = cleanBizId
 
-                // 4. Trigger sync immediately to download products and catalog into Room
+                // 4. Ensure local user in Room is registered as SALESMAN
+                val localUser = user ?: repository.getUserById(fUser.uid) ?: User(
+                    id = fUser.uid,
+                    name = fUser.displayName ?: "সেলস প্রতিনিধি",
+                    phone = fUser.phoneNumber ?: "01800000000",
+                    role = UserRole.SALESMAN,
+                    pinHash = repository.hashPin("1234"),
+                    isActive = true,
+                    accountStatus = UserAccountStatus.ACTIVE
+                )
+                val updatedLocalUser = localUser.copy(id = fUser.uid, role = UserRole.SALESMAN, isActive = true)
+                repository.saveUserDirect(updatedLocalUser)
+                _currentUser.value = updatedLocalUser
+
+                // 5. Trigger sync immediately to download products and catalog into Room
                 syncManager.triggerSync { success, msg ->
                     if (success) {
                         onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছে! সমস্ত পণ্য ও তালিকা সিঙ্ক সম্পন্ন।")
@@ -875,6 +889,135 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Links an authenticated Google account to a specific business as an authorized staff member (salesman)
+     * using the Admin's Business Code, registered phone, and PIN.
+     * Registers the salesman in Firestore under /businesses/{bizId}/staff/{uid} and /staff_memberships/{uid},
+     * stores the businessId locally, and triggers an immediate cloud sync to fetch products.
+     */
+    fun linkGoogleAccountWithBusiness(
+        firebaseUser: com.google.firebase.auth.FirebaseUser,
+        businessId: String,
+        phone: String,
+        pin: String,
+        onResult: (Boolean, String, UserRole?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val cleanBizId = businessId.trim()
+            val cleanPhone = phone.trim()
+            val cleanPin = pin.trim()
+
+            if (cleanBizId.isBlank()) {
+                onResult(false, "অ্যাডমিনের ক্লাউড বিজনেস কোড দিন!", null)
+                return@launch
+            }
+            if (cleanPhone.isBlank() || cleanPin.isBlank()) {
+                onResult(false, "মোবাইল নম্বর এবং পিন কোড সঠিকভাবে লিখুন!", null)
+                return@launch
+            }
+
+            try {
+                val firestore = FirebaseFirestore.getInstance()
+
+                // 1. Verify business document exists in Firestore
+                val bizDoc = firestore.collection("businesses").document(cleanBizId).get().await()
+                if (!bizDoc.exists()) {
+                    onResult(false, "এই বিজনেস কোড ($cleanBizId) ক্লাউডে পাওয়া যায়নি! অ্যাডমিনের সঠিক কোড দিন।", null)
+                    return@launch
+                }
+                val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
+
+                // 2. Verify staff authorization: check local user or Firestore staff_by_phone
+                var isAuthorized = false
+                var staffRole = UserRole.SALESMAN
+                var staffName = firebaseUser.displayName ?: "সেলস প্রতিনিধি"
+
+                val localAuth = repository.authenticateUser(cleanPhone, cleanPin)
+                if (localAuth is BusinessRepository.AuthResult.Success) {
+                    isAuthorized = true
+                    staffRole = localAuth.user.role
+                    if (localAuth.user.name.isNotBlank()) staffName = localAuth.user.name
+                } else {
+                    // Check remote Firestore staff_by_phone under this business
+                    try {
+                        val staffPhoneDoc = firestore.collection("businesses").document(cleanBizId)
+                            .collection("staff_by_phone").document(cleanPhone).get().await()
+                        if (staffPhoneDoc.exists()) {
+                            val isActive = staffPhoneDoc.getBoolean("isActive") ?: true
+                            if (isActive) {
+                                isAuthorized = true
+                                val remoteName = staffPhoneDoc.getString("name")
+                                if (!remoteName.isNullOrBlank()) staffName = remoteName
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (!isAuthorized) {
+                    onResult(false, "ভুল ফোন নম্বর অথবা পিন কোড! অনুমোদিত স্টাফ হিসেবে যাচাই করা সম্ভব হয়নি।", null)
+                    return@launch
+                }
+
+                // 3. Register active staff profile in Firestore under /businesses/{cleanBizId}/staff/{uid}
+                val staffDocRef = firestore.collection("businesses").document(cleanBizId)
+                    .collection("staff").document(firebaseUser.uid)
+                val staffData = mapOf(
+                    "id" to firebaseUser.uid,
+                    "name" to staffName,
+                    "phone" to cleanPhone,
+                    "email" to (firebaseUser.email ?: ""),
+                    "role" to staffRole.name,
+                    "isActive" to true,
+                    "businessId" to cleanBizId,
+                    "linkedAt" to System.currentTimeMillis()
+                )
+                staffDocRef.set(staffData, SetOptions.merge()).await()
+
+                // 4. Register in root /staff_memberships/{uid}
+                firestore.collection("staff_memberships").document(firebaseUser.uid).set(
+                    mapOf(
+                        "userId" to firebaseUser.uid,
+                        "businessId" to cleanBizId,
+                        "role" to staffRole.name,
+                        "isActive" to true,
+                        "email" to (firebaseUser.email ?: ""),
+                        "updatedAt" to System.currentTimeMillis()
+                    ),
+                    SetOptions.merge()
+                ).await()
+
+                // 5. Save in device-local preferences
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = cleanBizId,
+                    businessName = bizName,
+                    role = staffRole.name
+                )
+                _activeBusinessId.value = cleanBizId
+
+                // 6. Save in local Room database
+                val localUser = User(
+                    id = firebaseUser.uid,
+                    name = staffName,
+                    phone = cleanPhone,
+                    role = staffRole,
+                    pinHash = repository.hashPin(cleanPin),
+                    isActive = true,
+                    accountStatus = UserAccountStatus.ACTIVE
+                )
+                repository.saveUserDirect(localUser)
+                _currentUser.value = localUser
+
+                // 7. Trigger immediate cloud synchronization so products are downloaded right away!
+                syncManager.triggerSync()
+
+                onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছে! স্বাগতম, ${localUser.name}!", staffRole)
+            } catch (e: Exception) {
+                onResult(false, "লিংক ও কানেকশন ব্যর্থ: ${e.localizedMessage ?: e.message}", null)
+            }
+        }
+    }
+
+    /**
      * Securely links an authenticated Google account to an existing registered staff/admin profile
      * after local PIN verification.
      */
@@ -884,13 +1027,24 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         pin: String,
         onResult: (Boolean, String, UserRole?) -> Unit
     ) {
-        linkGoogleCredentialsWithPin(
-            uid = firebaseUser.uid,
-            displayName = firebaseUser.displayName,
-            phone = phone,
-            pin = pin,
-            onResult = onResult
-        )
+        val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
+        if (!existingBizId.isNullOrBlank()) {
+            linkGoogleAccountWithBusiness(
+                firebaseUser = firebaseUser,
+                businessId = existingBizId,
+                phone = phone,
+                pin = pin,
+                onResult = onResult
+            )
+        } else {
+            linkGoogleCredentialsWithPin(
+                uid = firebaseUser.uid,
+                displayName = firebaseUser.displayName,
+                phone = phone,
+                pin = pin,
+                onResult = onResult
+            )
+        }
     }
 
     fun linkGoogleCredentialsWithPin(
@@ -922,6 +1076,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             role = linkedUser.role.name
                         )
                         _activeBusinessId.value = existingBizId
+                        triggerSync()
                     }
                     onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে লিংক করা হয়েছে! স্বাগতম, ${linkedUser.name}!", linkedUser.role)
                 }
@@ -1083,6 +1238,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 repository.saveProduct(preparedProduct, user, isNew, reason)
                 _toastMessage.emit(if (isNew) "নতুন পণ্য সফলভাবে সংরক্ষিত হয়েছে" else "পণ্য সফলভাবে আপডেট হয়েছে")
                 onSuccess()
+
+                // Trigger real-time cloud upload to Firestore so separate salesman devices can fetch it
+                syncManager.triggerSync()
 
                 // Auto mode background image acquisition if no image was provided
                 if (preparedProduct.imageUri.isNullOrBlank() && productImageMode.value == "AUTO") {

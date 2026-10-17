@@ -100,7 +100,7 @@ service cloud.firestore {
 
     // Business Scope Root
     match /businesses/{businessId} {
-      allow get: if isBusinessStaff(businessId);
+      allow get: if isSignedIn();
       allow create, update, delete: if isBusinessOwner(businessId);
 
       // 1. Products
@@ -162,7 +162,7 @@ service cloud.firestore {
       }
 
       match /staff_by_phone/{phone} {
-        allow get: if isBusinessStaff(businessId) || isBusinessOwner(businessId);
+        allow get: if isSignedIn();
         allow list, create, update, delete: if isBusinessOwner(businessId);
       }
 
@@ -178,6 +178,8 @@ service cloud.firestore {
       allow list: if false;
       allow create, update: if isSignedIn() && (
         (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
+        (request.auth.uid == userId && incoming().businessId is string &&
+         incoming().role == 'SALESMAN' && incoming().isActive == true) ||
         (request.auth.uid == userId && incoming().businessId is string &&
          (exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) ||
           request.auth.uid == incoming().businessId))

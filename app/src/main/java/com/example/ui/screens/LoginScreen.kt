@@ -50,6 +50,7 @@ fun LoginScreen(
 
     var isGoogleLoading by remember { mutableStateOf(false) }
     var pendingGoogleUser by remember { mutableStateOf<com.google.firebase.auth.FirebaseUser?>(null) }
+    var linkBusinessIdInput by remember { mutableStateOf("") }
     var linkPhoneInput by remember { mutableStateOf("") }
     var linkPinInput by remember { mutableStateOf("") }
     var linkErrorMessage by remember { mutableStateOf("") }
@@ -544,6 +545,7 @@ fun LoginScreen(
                                     } else {
                                         errorMessage = msg
                                         pendingGoogleUser = fUser
+                                        linkBusinessIdInput = viewModel.getActiveBusinessId()
                                         linkPhoneInput = phone.ifBlank { "" }
                                         linkPinInput = ""
                                         linkErrorMessage = ""
@@ -594,15 +596,36 @@ fun LoginScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "নিরাপত্তার স্বার্থে আপনার পূর্বের নিবন্ধিত মোবাইল নম্বর ও পিন কোড দিয়ে অ্যাকাউন্টটি সংযুক্ত ও অনুমোদন করুন:",
+                        text = "নিরাপত্তার স্বার্থে অ্যাডমিনের ক্লাউড বিজনেস কোড, নিবন্ধিত মোবাইল নম্বর ও পিন কোড দিয়ে অ্যাকাউন্টটি অনুমোদন করুন:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     OutlinedTextField(
+                        value = linkBusinessIdInput,
+                        onValueChange = { linkBusinessIdInput = it; linkErrorMessage = "" },
+                        label = { Text("ক্লাউড বিজনেস কোড *") },
+                        placeholder = { Text("অ্যাডমিনের বিজনেস কোড পেস্ট করুন") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    linkBusinessIdInput = clip.trim()
+                                    linkErrorMessage = ""
+                                }
+                            }) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "পেস্ট করুন")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("link_business_id_input")
+                    )
+
+                    OutlinedTextField(
                         value = linkPhoneInput,
                         onValueChange = { linkPhoneInput = it; linkErrorMessage = "" },
-                        label = { Text("নিবন্ধিত মোবাইল নম্বর") },
+                        label = { Text("নিবন্ধিত মোবাইল নম্বর *") },
                         placeholder = { Text("01XXXXXXXXX") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -612,7 +635,7 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = linkPinInput,
                         onValueChange = { linkPinInput = it; linkErrorMessage = "" },
-                        label = { Text("গোপন পিন কোড") },
+                        label = { Text("গোপন পিন কোড *") },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         singleLine = true,
@@ -634,17 +657,35 @@ fun LoginScreen(
                     onClick = {
                         isLinkingLoading = true
                         linkErrorMessage = ""
-                        viewModel.linkGoogleAccountWithPin(
-                            firebaseUser = fUser,
-                            phone = linkPhoneInput.trim(),
-                            pin = linkPinInput.trim()
-                        ) { success, msg, role ->
-                            isLinkingLoading = false
-                            if (success) {
-                                pendingGoogleUser = null
-                                onLoginSuccess()
-                            } else {
-                                linkErrorMessage = msg
+                        val cleanBiz = linkBusinessIdInput.trim()
+                        if (cleanBiz.isNotBlank()) {
+                            viewModel.linkGoogleAccountWithBusiness(
+                                firebaseUser = fUser,
+                                businessId = cleanBiz,
+                                phone = linkPhoneInput.trim(),
+                                pin = linkPinInput.trim()
+                            ) { success, msg, role ->
+                                isLinkingLoading = false
+                                if (success) {
+                                    pendingGoogleUser = null
+                                    onLoginSuccess()
+                                } else {
+                                    linkErrorMessage = msg
+                                }
+                            }
+                        } else {
+                            viewModel.linkGoogleAccountWithPin(
+                                firebaseUser = fUser,
+                                phone = linkPhoneInput.trim(),
+                                pin = linkPinInput.trim()
+                            ) { success, msg, role ->
+                                isLinkingLoading = false
+                                if (success) {
+                                    pendingGoogleUser = null
+                                    onLoginSuccess()
+                                } else {
+                                    linkErrorMessage = msg
+                                }
                             }
                         }
                     },

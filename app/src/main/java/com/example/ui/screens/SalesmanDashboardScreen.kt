@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.style.TextOverflow
+import com.example.util.GoogleSignInButton
+import com.example.util.GoogleSignInHelper
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -220,7 +225,76 @@ fun SalesmanDashboardScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Cloud Business Connection Card
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("salesman_business_connection_card")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (activeBizId.isNotBlank()) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = if (activeBizId.isNotBlank()) Color(0xFF81C784) else Color(0xFFFFB74D),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = if (activeBizId.isNotBlank()) "সংযুক্ত ক্লাউড ব্যবসা:" else "ক্লাউড ব্যবসার সাথে সংযোগ নেই",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = if (activeBizId.isNotBlank()) activeBizId else "অ্যাডমিনের বিজনেস কোড দিয়ে যুক্ত হন",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            TextButton(
+                                onClick = {
+                                    inputBizId = activeBizId
+                                    showConnectDialog = true
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("btn_salesman_connect_business")
+                            ) {
+                                Icon(
+                                    imageVector = if (activeBizId.isNotBlank()) Icons.Default.Sync else Icons.Default.AddLink,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (activeBizId.isNotBlank()) "সিঙ্ক/কোড" else "কানেক্ট",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     // Personal Today's Metrics
                     Row(
@@ -661,4 +735,142 @@ fun SalesmanDashboardScreen(
         }
     }
 
+    if (showConnectDialog) {
+        var connectError by remember { mutableStateOf("") }
+        var isGoogleSigningIn by remember { mutableStateOf(false) }
+        val coroutineScope = rememberCoroutineScope()
+        val authUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+
+        AlertDialog(
+            onDismissRequest = { if (!isConnecting) showConnectDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.CloudSync,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "ক্লাউড বিজনেসে সংযুক্তকরণ",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "অ্যাডমিন ফোনের ড্যাশবোর্ডে প্রদর্শিত 'ক্লাউড বিজনেস কোড' এখানে লিখুন বা পেস্ট করুন। এর ফলে অ্যাডমিনের যুক্ত করা সমস্ত পণ্য ও স্টক আপনার ফোনে ডাউনলোড হবে।",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (authUser == null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "ক্লাউড ডাটা সিঙ্ক করার জন্য প্রথমে গুগল সাইন-ইন আবশ্যক।",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+
+                        GoogleSignInButton(
+                            isLoading = isGoogleSigningIn,
+                            onClick = {
+                                isGoogleSigningIn = true
+                                connectError = ""
+                                GoogleSignInHelper.launchGoogleSignIn(
+                                    context = context,
+                                    scope = coroutineScope,
+                                    onAuthSuccess = { fUser ->
+                                        isGoogleSigningIn = false
+                                        Toast.makeText(context, "গুগল সাইন-ইন সফল: ${fUser.displayName ?: fUser.email}", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onError = { err ->
+                                        isGoogleSigningIn = false
+                                        connectError = err
+                                    }
+                                )
+                            }
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = inputBizId,
+                        onValueChange = { inputBizId = it; connectError = "" },
+                        label = { Text("ক্লাউড বিজনেস কোড") },
+                        placeholder = { Text("অ্যাডমিনের বিজনেস কোড পেস্ট করুন") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    inputBizId = clip.trim()
+                                    connectError = ""
+                                }
+                            }) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "পেস্ট করুন")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("input_salesman_biz_id")
+                    )
+
+                    if (connectError.isNotBlank()) {
+                        Text(
+                            text = connectError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clean = inputBizId.trim()
+                        if (clean.isBlank()) {
+                            connectError = "বিজনেস কোড খালি রাখা যাবে না!"
+                            return@Button
+                        }
+                        isConnecting = true
+                        connectError = ""
+                        viewModel.connectSalesmanToBusiness(clean) { success, msg ->
+                            isConnecting = false
+                            if (success) {
+                                showConnectDialog = false
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            } else {
+                                connectError = msg
+                            }
+                        }
+                    },
+                    enabled = !isConnecting,
+                    modifier = Modifier.testTag("btn_confirm_salesman_connect")
+                ) {
+                    if (isConnecting) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("কানেক্ট ও সিঙ্ক করুন")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showConnectDialog = false },
+                    enabled = !isConnecting
+                ) {
+                    Text("বাতিল")
+                }
+            }
+        )
+    }
 }

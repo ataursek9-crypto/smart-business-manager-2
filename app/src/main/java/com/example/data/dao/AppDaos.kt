@@ -83,7 +83,7 @@ interface ProductDao {
     @Query("SELECT COUNT(*) FROM products WHERE isActive = 1 AND isTestData = 0")
     suspend fun getRealProductsCount(): Int
 
-    @Query("SELECT * FROM products WHERE isTestData = 0")
+    @Query("SELECT * FROM products")
     suspend fun getSyncProducts(): List<Product>
 }
 
