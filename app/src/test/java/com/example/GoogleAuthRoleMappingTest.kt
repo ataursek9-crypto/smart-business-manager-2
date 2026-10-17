@@ -159,4 +159,30 @@ class GoogleAuthRoleMappingTest {
 
         assertFalse("Linking with incorrect PIN must fail", linkSuccess == true)
     }
+
+    @Test
+    fun `test phone normalization handles international prefix spaces and local formats`() {
+        assertEquals("01811223344", com.example.data.sync.CloudBusinessAuth.normalizePhone("+8801811223344"))
+        assertEquals("01811223344", com.example.data.sync.CloudBusinessAuth.normalizePhone("8801811223344"))
+        assertEquals("01811223344", com.example.data.sync.CloudBusinessAuth.normalizePhone("01811-223344"))
+        assertEquals("01811223344", com.example.data.sync.CloudBusinessAuth.normalizePhone(" 01811 223344 "))
+        assertEquals("01700000000", com.example.data.sync.CloudBusinessAuth.normalizePhone("+8801700000000"))
+    }
+
+    @Test
+    fun `test connectSalesmanToBusiness rejects blank inputs without network call`() {
+        var callbackSuccess: Boolean? = null
+        var callbackMsg: String? = null
+
+        viewModel.connectSalesmanToBusiness(
+            businessId = "",
+            phone = "01811223344",
+            pin = "1234"
+        ) { success, msg ->
+            callbackSuccess = success
+            callbackMsg = msg
+        }
+        assertFalse("Blank business ID must be rejected", callbackSuccess == true)
+        assertTrue("Error must mention business code", callbackMsg!!.contains("বিজনেস কোড"))
+    }
 }

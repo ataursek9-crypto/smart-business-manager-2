@@ -195,6 +195,11 @@ class CloudSyncManager(
             if (email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local") {
                 return false
             }
+            // If the user is connected to an active business that they do not own, they are a salesman
+            val activeBizId = CloudBusinessAuth.getStoredBusinessId(context)
+            if (!activeBizId.isNullOrBlank() && authUser.uid != activeBizId) {
+                return true
+            }
             val localUser = db.userDao().getUserById(authUser.uid)
             if (localUser != null) {
                 return localUser.role == UserRole.SALESMAN
@@ -427,19 +432,21 @@ class CloudSyncManager(
             val activeUsers = db.userDao().getAllActiveUsersList()
             for (user in activeUsers) {
                 if (user.role == UserRole.SALESMAN) {
+                    val cleanPhone = CloudBusinessAuth.normalizePhone(user.phone)
                     val staffData = mapOf(
                         "id" to user.id,
                         "name" to user.name,
-                        "phone" to user.phone,
+                        "phone" to cleanPhone,
                         "role" to user.role.name,
                         "isActive" to (user.isActive && user.accountStatus == UserAccountStatus.ACTIVE),
                         "canDiscount" to user.canDiscount,
                         "businessId" to businessId,
+                        "pinHash" to user.pinHash,
                         "updatedAt" to System.currentTimeMillis()
                     )
                     bizDocRef.collection("staff").document(user.id).set(staffData, SetOptions.merge()).awaitResult()
-                    if (user.phone.isNotBlank()) {
-                        bizDocRef.collection("staff_by_phone").document(user.phone.trim()).set(staffData, SetOptions.merge()).awaitResult()
+                    if (cleanPhone.isNotBlank()) {
+                        bizDocRef.collection("staff_by_phone").document(cleanPhone).set(staffData, SetOptions.merge()).awaitResult()
                     }
                 }
             }
@@ -901,6 +908,17 @@ object CloudBusinessAuth {
         if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
         if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
         editor.apply()
+    }
+
+    fun normalizePhone(raw: String): String {
+        val digits = raw.replace(Regex("[^0-9+]"), "").trim()
+        return when {
+            digits.startsWith("+880") -> "0" + digits.substring(4)
+            digits.startsWith("880") -> "0" + digits.substring(3)
+            digits.startsWith("+88") -> digits.substring(3)
+            digits.startsWith("88") && digits.length > 11 -> digits.substring(2)
+            else -> digits
+        }
     }
 
     fun clear(context: Context) {

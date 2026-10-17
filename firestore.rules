@@ -117,27 +117,27 @@ service cloud.firestore {
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 3. Sales (Invoices) - Staff can create, only Owner can delete
+      // 3. Sales (Invoices) - Staff can create & sync, only Owner can delete
       match /sales/{invoiceNumber} {
         allow get, list: if isBusinessStaff(businessId);
         allow create: if isBusinessStaff(businessId) && isValidSale(incoming());
-        allow update: if isBusinessOwner(businessId) && isValidSale(incoming());
+        allow update: if (isBusinessOwner(businessId) || isBusinessStaff(businessId)) && isValidSale(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 4. Payment Receipts - Staff can collect, only Owner can delete
+      // 4. Payment Receipts - Staff can collect & sync, only Owner can delete
       match /payments/{receiptNumber} {
         allow get, list: if isBusinessStaff(businessId);
         allow create: if isBusinessStaff(businessId) && isValidReceipt(incoming());
-        allow update: if isBusinessOwner(businessId) && isValidReceipt(incoming());
+        allow update: if (isBusinessOwner(businessId) || isBusinessStaff(businessId)) && isValidReceipt(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 5. Expenses - Staff can submit, only Owner can approve or delete
+      // 5. Expenses - Staff can submit & sync, only Owner can approve or delete
       match /expenses/{expenseId} {
         allow get, list: if isBusinessStaff(businessId);
         allow create: if isBusinessStaff(businessId) && isValidExpense(incoming());
-        allow update: if isBusinessOwner(businessId) && isValidExpense(incoming());
+        allow update: if (isBusinessOwner(businessId) || isBusinessStaff(businessId)) && isValidExpense(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
@@ -150,7 +150,7 @@ service cloud.firestore {
 
       // 7. Staff Members - Owner manages staff accounts, pre-registered staff can link account
       match /staff/{staffUid} {
-        allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid);
+        allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid || isBusinessStaff(businessId));
         allow list: if isBusinessOwner(businessId) || isBusinessStaff(businessId);
         allow create, update: if isBusinessOwner(businessId) || (
           isSignedIn() && request.auth.uid == staffUid &&
@@ -158,12 +158,12 @@ service cloud.firestore {
           incoming().role == 'SALESMAN' &&
           incoming().businessId == businessId &&
           (
+            ('phone' in incoming() && incoming().phone is string && incoming().phone.size() > 0 &&
+             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)) &&
+             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true) ||
             (request.auth.token.email != null &&
              exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)) &&
-             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true) ||
-            (incoming().phone is string &&
-             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)) &&
-             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true)
+             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true)
           )
         );
         allow delete: if isBusinessOwner(businessId);
@@ -175,25 +175,33 @@ service cloud.firestore {
       }
 
       match /staff_by_email/{email} {
-        allow get: if isSignedIn() && (request.auth.token.email == email || isBusinessOwner(businessId));
+        allow get: if isSignedIn() && (
+          (request.auth.token.email != null && request.auth.token.email.lower() == email.lower()) ||
+          isBusinessOwner(businessId)
+        );
         allow list, create, update, delete: if isBusinessOwner(businessId);
       }
     }
 
     // Staff memberships index to allow salesmen on separate devices to resolve their authorized businessId
     match /staff_memberships/{userId} {
-      allow get: if isSignedIn() && (request.auth.uid == userId || isBusinessOwner(resource.data.businessId));
+      allow get: if isSignedIn() && (request.auth.uid == userId || (resource != null && 'businessId' in resource.data && isBusinessOwner(resource.data.businessId)));
       allow list: if false;
       allow create, update: if isSignedIn() && (
         (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
         (request.auth.uid == userId && incoming().businessId is string &&
          incoming().role == 'SALESMAN' && incoming().isActive == true &&
-         exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)).data.isActive == true)
+         (
+           (exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
+           ('phone' in incoming() && incoming().phone is string && incoming().phone.size() > 0 &&
+            exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)) &&
+            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true)
+         ))
       );
       allow delete: if isSignedIn() && (
         request.auth.uid == userId ||
-        (resource.data.businessId is string && request.auth.uid == resource.data.businessId)
+        (resource != null && 'businessId' in resource.data && request.auth.uid == resource.data.businessId)
       );
     }
   }

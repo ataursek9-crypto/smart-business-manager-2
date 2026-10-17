@@ -19,6 +19,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -736,10 +739,12 @@ fun SalesmanDashboardScreen(
     }
 
     if (showConnectDialog) {
+        var inputPhone by remember { mutableStateOf(user?.phone ?: "") }
+        var inputPin by remember { mutableStateOf("") }
         var connectError by remember { mutableStateOf("") }
         var isGoogleSigningIn by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
-        val authUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        var authUser by remember { mutableStateOf(try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }) }
 
         AlertDialog(
             onDismissRequest = { if (!isConnecting) showConnectDialog = false },
@@ -761,7 +766,7 @@ fun SalesmanDashboardScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "অ্যাডমিন ফোনের ড্যাশবোর্ডে প্রদর্শিত 'ক্লাউড বিজনেস কোড' এখানে লিখুন বা পেস্ট করুন। এর ফলে অ্যাডমিনের যুক্ত করা সমস্ত পণ্য ও স্টক আপনার ফোনে ডাউনলোড হবে।",
+                        text = "অ্যাডমিন ফোনের ড্যাশবোর্ডে প্রদর্শিত 'ক্লাউড বিজনেস কোড', আপনার নিবন্ধিত মোবাইল নম্বর ও পিন কোড দিন। এর ফলে অ্যাডমিনের পণ্য ও স্টক নিরাপদভাবে আপনার ফোনে সিঙ্ক হবে।",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -791,6 +796,7 @@ fun SalesmanDashboardScreen(
                                     scope = coroutineScope,
                                     onAuthSuccess = { fUser ->
                                         isGoogleSigningIn = false
+                                        authUser = fUser
                                         Toast.makeText(context, "গুগল সাইন-ইন সফল: ${fUser.displayName ?: fUser.email}", Toast.LENGTH_SHORT).show()
                                     },
                                     onError = { err ->
@@ -800,12 +806,31 @@ fun SalesmanDashboardScreen(
                                 )
                             }
                         )
+                    } else {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "গুগল আইডি: ${authUser?.email ?: authUser?.displayName ?: "প্রমাণিত"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
                     OutlinedTextField(
                         value = inputBizId,
                         onValueChange = { inputBizId = it; connectError = "" },
-                        label = { Text("ক্লাউড বিজনেস কোড") },
+                        label = { Text("ক্লাউড বিজনেস কোড *") },
                         placeholder = { Text("অ্যাডমিনের বিজনেস কোড পেস্ট করুন") },
                         singleLine = true,
                         trailingIcon = {
@@ -821,6 +846,26 @@ fun SalesmanDashboardScreen(
                             }
                         },
                         modifier = Modifier.fillMaxWidth().testTag("input_salesman_biz_id")
+                    )
+
+                    OutlinedTextField(
+                        value = inputPhone,
+                        onValueChange = { inputPhone = it; connectError = "" },
+                        label = { Text("নিবন্ধিত মোবাইল নম্বর *") },
+                        placeholder = { Text("018XXXXXXXX") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth().testTag("input_salesman_phone")
+                    )
+
+                    OutlinedTextField(
+                        value = inputPin,
+                        onValueChange = { inputPin = it; connectError = "" },
+                        label = { Text("গোপন পিন কোড *") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("input_salesman_pin")
                     )
 
                     if (connectError.isNotBlank()) {
@@ -841,9 +886,21 @@ fun SalesmanDashboardScreen(
                             connectError = "বিজনেস কোড খালি রাখা যাবে না!"
                             return@Button
                         }
+                        if (inputPhone.isBlank()) {
+                            connectError = "নিবন্ধিত মোবাইল নম্বর দিন!"
+                            return@Button
+                        }
+                        if (inputPin.isBlank()) {
+                            connectError = "গোপন পিন কোড দিন!"
+                            return@Button
+                        }
                         isConnecting = true
                         connectError = ""
-                        viewModel.connectSalesmanToBusiness(clean) { success, msg ->
+                        viewModel.connectSalesmanToBusiness(
+                            businessId = clean,
+                            phone = inputPhone.trim(),
+                            pin = inputPin.trim()
+                        ) { success, msg ->
                             isConnecting = false
                             if (success) {
                                 showConnectDialog = false
