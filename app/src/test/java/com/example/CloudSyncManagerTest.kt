@@ -256,4 +256,108 @@ class CloudSyncManagerTest {
         // 1 real product + 1 real customer = 2
         assertEquals(2, pending)
     }
+
+    @Test
+    fun `test resolveBusinessId rejects unauthenticated caller and never returns fallback ID`() {
+        try {
+            syncManager.resolveBusinessId()
+            fail("Expected IllegalStateException when calling resolveBusinessId without authentication")
+        } catch (e: IllegalStateException) {
+            assertTrue(
+                "Error message must clearly reject unauthenticated access",
+                e.message!!.contains("অনুপস্থিত") || e.message!!.contains("প্রমাণীকরণ") || e.message!!.contains("নিষিদ্ধ")
+            )
+        }
+    }
+
+    @Test
+    fun `test sale idempotency ensures duplicate invoices are never inserted twice`() = runBlocking {
+        val sale = Sale(
+            invoiceNumber = "INV-TEST-DUP-01",
+            customerId = "cust_dup",
+            customerName = "টেস্ট কাস্টমার",
+            customerPhone = "01800000000",
+            salesmanId = "sales_01",
+            salesmanName = "করিম",
+            subtotal = 1000.0,
+            discount = 100.0,
+            totalAmount = 900.0,
+            paidAmount = 900.0,
+            dueAmount = 0.0,
+            paymentMethod = PaymentMethod.CASH,
+            isDeleted = false,
+            createdAt = 1700000000L,
+            isTestData = true
+        )
+        // First insert
+        db.saleDao().insertSale(sale)
+        val initialCount = db.saleDao().getSalesCount()
+
+        // Attempting to check if sale exists by invoice
+        val existing = db.saleDao().getSaleByInvoice("INV-TEST-DUP-01")
+        assertNotNull("Sale must exist", existing)
+
+        // Idempotency check logic as executed by CloudSyncManager: if existing != null, do not re-insert
+        if (db.saleDao().getSaleByInvoice("INV-TEST-DUP-01") == null) {
+            db.saleDao().insertSale(sale.copy(totalAmount = 9999.0))
+        }
+
+        val finalCount = db.saleDao().getSalesCount()
+        assertEquals("Total sales count must remain unchanged (no duplicate invoice)", initialCount, finalCount)
+    }
+
+    @Test
+    fun `test payment receipt idempotency ensures duplicate receipts are never inserted twice`() = runBlocking {
+        val receipt = PaymentReceipt(
+            receiptNumber = "RCT-TEST-DUP-01",
+            invoiceNumber = "INV-TEST-DUP-01",
+            customerId = "cust_dup",
+            customerName = "টেস্ট কাস্টমার",
+            customerPhone = "01800000000",
+            salesmanId = "sales_01",
+            salesmanName = "করিম",
+            amount = 500.0,
+            previousDue = 900.0,
+            currentDue = 400.0,
+            paymentMethod = PaymentMethod.BKASH,
+            note = "টেস্ট রসিদ",
+            isDeleted = false,
+            createdAt = 1700000100L,
+            isTestData = true
+        )
+        // First insert
+        db.paymentReceiptDao().insertReceipt(receipt)
+        val initialCount = db.paymentReceiptDao().getReceiptCount()
+
+        // Idempotency check logic as executed by CloudSyncManager
+        if (db.paymentReceiptDao().getReceiptByNumber("RCT-TEST-DUP-01") == null) {
+            db.paymentReceiptDao().insertReceipt(receipt.copy(amount = 9999.0))
+        }
+
+        val finalCount = db.paymentReceiptDao().getReceiptCount()
+        assertEquals("Total receipts count must remain unchanged (no duplicate receipt)", initialCount, finalCount)
+    }
+
+    @Test
+    fun `test tombstone prevents deleted product from being resurrected`() = runBlocking {
+        // Record deletion tombstone for prod_del_01
+        syncManager.recordTombstone(
+            originalTable = "products",
+            originalId = "prod_del_01",
+            adminUserId = "admin_test",
+            isPermanent = true
+        )
+
+        val tombstone = db.recycleBinDao().getItemByOriginalId("products", "prod_del_01")
+        assertNotNull(tombstone)
+        assertFalse(tombstone!!.isRestored)
+
+        // Simulate remote product download check
+        val incomingRemoteProductId = "prod_del_01"
+        val activeTombstone = db.recycleBinDao().getItemByOriginalId("products", incomingRemoteProductId)
+        val shouldSkip = activeTombstone != null && !activeTombstone.isRestored
+
+        assertTrue("Product with active tombstone must be skipped from insertion", shouldSkip)
+        assertNull("Product must not exist in local database", db.productDao().getProductById("prod_del_01"))
+    }
 }

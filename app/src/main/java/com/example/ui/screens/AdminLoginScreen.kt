@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -23,7 +24,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.UserRole
 import com.example.ui.theme.PrimaryNavy
+import com.example.util.GoogleSignInButton
+import com.example.util.GoogleSignInHelper
 import com.example.viewmodel.BusinessViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -34,11 +38,14 @@ fun AdminLoginScreen(
     onAdminLoginSuccess: () -> Unit
 ) {
     BackHandler { onBack() }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var phone by remember { mutableStateOf("") }
     var pin by remember { mutableStateOf("") }
     var showPin by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var isGoogleLoading by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -235,6 +242,56 @@ fun AdminLoginScreen(
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // OR Divider
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                        Text(
+                            text = " অথবা ",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // Google Sign-In Button
+                    GoogleSignInButton(
+                        isLoading = isGoogleLoading,
+                        onClick = {
+                            isGoogleLoading = true
+                            errorMessage = ""
+                            GoogleSignInHelper.launchGoogleSignIn(
+                                context = context,
+                                scope = coroutineScope,
+                                onAuthSuccess = { fUser ->
+                                    viewModel.handleGoogleSignInSuccess(fUser) { success, msg, role ->
+                                        isGoogleLoading = false
+                                        if (success) {
+                                            if (role == UserRole.ADMIN) {
+                                                onAdminLoginSuccess()
+                                            } else {
+                                                errorMessage = "অননুমোদিত অ্যাকাউন্ট! শুধুমাত্র অ্যাডমিন গুগল অ্যাকাউন্ট প্রবেশ করতে পারবেন।"
+                                            }
+                                        } else {
+                                            errorMessage = msg
+                                        }
+                                    }
+                                },
+                                onError = { err ->
+                                    isGoogleLoading = false
+                                    errorMessage = err
+                                }
+                            )
+                        }
+                    )
                 }
             }
 

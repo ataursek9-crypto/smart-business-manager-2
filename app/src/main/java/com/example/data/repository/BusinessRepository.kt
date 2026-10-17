@@ -667,6 +667,15 @@ class BusinessRepository(
 
     suspend fun getUserById(id: String): User? = db.userDao().getUserById(id)
 
+    suspend fun saveUserDirect(user: User) {
+        db.userDao().insertUser(user)
+    }
+
+    fun isAuthorizedAdminEmail(email: String): Boolean {
+        val clean = email.trim().lowercase()
+        return clean == "ataurgonee4@gmail.com" || clean == "support@smartbiz.local"
+    }
+
     suspend fun updateAdminSecurityCredentials(
         adminId: String,
         currentPin: String,

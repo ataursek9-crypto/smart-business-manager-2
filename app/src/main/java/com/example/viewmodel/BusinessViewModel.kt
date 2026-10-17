@@ -625,7 +625,174 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
     fun logout() {
         _currentUser.value = null
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+        } catch (_: Exception) {}
         savedAccountManager.handleLogout()
+    }
+
+    /**
+     * Authenticate or map an authenticated Firebase User into the local business role.
+     * Enforces:
+     * 1. Does not automatically grant admin access to every Google account.
+     * 2. Verifies user belongs to an authorized business and has an assigned role.
+     * 3. Rejects unknown/unauthorized Google accounts.
+     */
+    /**
+     * Authenticate or map an authenticated Firebase User into the local business role.
+     */
+    fun handleGoogleSignInSuccess(
+        firebaseUser: com.google.firebase.auth.FirebaseUser,
+        onResult: (Boolean, String, UserRole?) -> Unit
+    ) {
+        handleGoogleUserCredentials(
+            uid = firebaseUser.uid,
+            email = firebaseUser.email,
+            displayName = firebaseUser.displayName,
+            phoneNumber = firebaseUser.phoneNumber,
+            onResult = onResult
+        )
+    }
+
+    /**
+     * Internal credential mapping logic:
+     * Enforces:
+     * 1. Does not automatically grant admin access to every Google account.
+     * 2. Verifies user belongs to an authorized business and has an assigned role.
+     * 3. Rejects unknown/unauthorized Google accounts.
+     */
+    fun handleGoogleUserCredentials(
+        uid: String,
+        email: String?,
+        displayName: String?,
+        phoneNumber: String?,
+        onResult: (Boolean, String, UserRole?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val phone = phoneNumber ?: ""
+            val cleanEmail = email ?: ""
+            val name = displayName ?: "গুগল ব্যবহারকারী"
+
+            // 1. Check if user already exists in Room by Firebase UID
+            val existingUserByUid = repository.getUserById(uid)
+            if (existingUserByUid != null) {
+                if (!existingUserByUid.isActive || existingUserByUid.accountStatus != UserAccountStatus.ACTIVE) {
+                    _currentUser.value = null
+                    onResult(false, "আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত বা নিষ্ক্রিয় করা হয়েছে। অ্যাডমিনের সাথে যোগাযোগ করুন।", null)
+                    return@launch
+                }
+                _currentUser.value = existingUserByUid
+                onResult(true, "স্বাগতম, ${existingUserByUid.name}!", existingUserByUid.role)
+                return@launch
+            }
+
+            // 2. Check if user already exists by phone (if Google provided verified phone number)
+            if (phone.isNotBlank()) {
+                val existingUserByPhone = repository.getUserByPhone(phone)
+                if (existingUserByPhone != null) {
+                    if (!existingUserByPhone.isActive || existingUserByPhone.accountStatus != UserAccountStatus.ACTIVE) {
+                        _currentUser.value = null
+                        onResult(false, "আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত বা নিষ্ক্রিয়।", null)
+                        return@launch
+                    }
+                    val linkedUser = existingUserByPhone.copy(id = uid)
+                    repository.saveUserDirect(linkedUser)
+                    _currentUser.value = linkedUser
+                    onResult(true, "স্বাগতম, ${linkedUser.name}!", linkedUser.role)
+                    return@launch
+                }
+            }
+
+            // 3. Check if this is the registered primary business owner (ataurgonee4@gmail.com or authorized admin email)
+            val isPrimaryOwner = cleanEmail.isNotBlank() && repository.isAuthorizedAdminEmail(cleanEmail)
+
+            if (isPrimaryOwner) {
+                val adminUser = User(
+                    id = uid,
+                    name = name.ifBlank { "মোঃ আতাউর রহমান" },
+                    phone = phone.ifBlank { "01700000000" },
+                    role = UserRole.ADMIN,
+                    pinHash = repository.hashPin("1234"),
+                    isActive = true,
+                    accountStatus = UserAccountStatus.ACTIVE
+                )
+                repository.saveUserDirect(adminUser)
+                _currentUser.value = adminUser
+                onResult(true, "এডমিন প্যানেলে স্বাগতম, ${adminUser.name}!", UserRole.ADMIN)
+                return@launch
+            }
+
+            // 4. Unknown/unauthorized Google user: DO NOT GRANT ADMIN OR GENERAL ACCESS AUTOMATICALLY
+            _currentUser.value = null
+            onResult(
+                false,
+                "এই গুগল অ্যাকাউন্টটি (${if (cleanEmail.isNotBlank()) cleanEmail else name}) কোনো অনুমোদিত ব্যবসা বা অ্যাকাউন্টের সাথে যুক্ত নয়। অনুগ্রহ করে অ্যাডমিনের সাথে যোগাযোগ করুন অথবা পিন দিয়ে লগইন করুন।",
+                null
+            )
+        }
+    }
+
+    /**
+     * Securely links an authenticated Google account to an existing registered staff/admin profile
+     * after local PIN verification.
+     */
+    fun linkGoogleAccountWithPin(
+        firebaseUser: com.google.firebase.auth.FirebaseUser,
+        phone: String,
+        pin: String,
+        onResult: (Boolean, String, UserRole?) -> Unit
+    ) {
+        linkGoogleCredentialsWithPin(
+            uid = firebaseUser.uid,
+            displayName = firebaseUser.displayName,
+            phone = phone,
+            pin = pin,
+            onResult = onResult
+        )
+    }
+
+    fun linkGoogleCredentialsWithPin(
+        uid: String,
+        displayName: String?,
+        phone: String,
+        pin: String,
+        onResult: (Boolean, String, UserRole?) -> Unit
+    ) {
+        viewModelScope.launch {
+            if (phone.isBlank() || pin.isBlank()) {
+                onResult(false, "ফোন নম্বর এবং পিন কোড সঠিকভাবে লিখুন!", null)
+                return@launch
+            }
+            when (val auth = repository.authenticateUser(phone, pin)) {
+                is BusinessRepository.AuthResult.Success -> {
+                    val localUser = auth.user
+                    val linkedUser = localUser.copy(
+                        id = uid,
+                        name = if (displayName.isNullOrBlank()) localUser.name else displayName
+                    )
+                    repository.saveUserDirect(linkedUser)
+                    _currentUser.value = linkedUser
+                    onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে লিংক করা হয়েছে! স্বাগতম, ${linkedUser.name}!", linkedUser.role)
+                }
+                is BusinessRepository.AuthResult.Error -> {
+                    when (val adminAuth = repository.authenticateAdmin(phone, pin)) {
+                        is BusinessRepository.AuthResult.Success -> {
+                            val adminUser = adminAuth.user
+                            val linkedAdmin = adminUser.copy(
+                                id = uid,
+                                name = if (displayName.isNullOrBlank()) adminUser.name else displayName
+                            )
+                            repository.saveUserDirect(linkedAdmin)
+                            _currentUser.value = linkedAdmin
+                            onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে এডমিন হিসেবে লিংক করা হয়েছে!", UserRole.ADMIN)
+                        }
+                        is BusinessRepository.AuthResult.Error -> {
+                            onResult(false, "ভুল ফোন নম্বর অথবা পিন কোড! লিংক করা সম্ভব হয়নি।", null)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Saved Account Operations

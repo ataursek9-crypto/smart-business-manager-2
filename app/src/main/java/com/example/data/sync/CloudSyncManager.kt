@@ -169,7 +169,7 @@ class CloudSyncManager(
     private val isSyncing = AtomicBoolean(false)
 
     /**
-     * Checks whether Firebase is properly configured on device and backend is accessible.
+     * Checks whether Firebase is properly configured on device and an authenticated user session is active.
      */
     fun isCloudBackendConfigured(): Boolean {
         return try {
@@ -178,7 +178,8 @@ class CloudSyncManager(
                 val resId = context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
                 return resId != 0
             }
-            true
+            val authUser = FirebaseAuth.getInstance().currentUser
+            authUser != null && authUser.uid.isNotBlank()
         } catch (e: Exception) {
             false
         }
@@ -186,19 +187,22 @@ class CloudSyncManager(
 
     /**
      * Resolves the secure multi-tenant business ID for cloud isolation under /businesses/{businessId}/.
+     * Enforces strict authentication: never returns a fallback ID when unauthenticated.
      */
     fun resolveBusinessId(): String {
-        return try {
-            if (FirebaseApp.getApps(context).isNotEmpty()) {
-                val authUser = FirebaseAuth.getInstance().currentUser
-                if (authUser != null && authUser.uid.isNotBlank()) {
-                    return authUser.uid
-                }
-            }
-            "biz_default_main"
-        } catch (e: Exception) {
-            "biz_default_main"
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            throw IllegalStateException("ফায়ারবেস কনফিগারেশন অনুপস্থিত (google-services.json প্রয়োজন)।")
         }
+        val authUser = try {
+            FirebaseAuth.getInstance().currentUser
+        } catch (e: Exception) {
+            null
+        } ?: throw IllegalStateException("ক্লাউড সিঙ্ক করার জন্য গুগল একাউন্টে প্রমাণীকরণ (Authentication) আবশ্যক। ফলব্যাক আইডি ব্যবহার নিষিদ্ধ।")
+
+        if (authUser.uid.isBlank()) {
+            throw IllegalStateException("অবৈধ ইউজার আইডি। ক্লাউড সিঙ্ক বাতিল করা হয়েছে।")
+        }
+        return authUser.uid
     }
 
     /**
@@ -209,7 +213,12 @@ class CloudSyncManager(
         val cloudConfigured = isCloudBackendConfigured()
         if (!cloudConfigured) {
             val pendingCount = countPendingLocalRecords()
-            val statusText = "লোকাল ডেটা সংরক্ষিত — ক্লাউড সেটআপ বাকি"
+            val hasFirebaseApp = try { FirebaseApp.getApps(context).isNotEmpty() } catch (e: Exception) { false }
+            val statusText = if (!hasFirebaseApp) {
+                "লোকাল ডেটা সংরক্ষিত — ক্লাউড সেটআপ বাকি"
+            } else {
+                "লোকাল ডেটা সংরক্ষিত — গুগল একাউন্টে সাইন-ইন প্রয়োজন"
+            }
             val state = SyncState(
                 status = SyncStatus.LOCAL_SAVED,
                 statusText = statusText,
