@@ -17,6 +17,11 @@ import java.util.UUID
 
 import com.example.data.storage.SavedAccount
 import com.example.data.storage.SavedAccountManager
+import kotlinx.coroutines.tasks.await
+import com.example.data.sync.CloudBusinessAuth
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 data class DashboardSummary(
     val todaySales: Double = 0.0,
@@ -59,8 +64,105 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     val syncManager = com.example.data.sync.CloudSyncManager(application, repository.getDbInstance())
     val syncState: StateFlow<com.example.data.sync.SyncState> = syncManager.syncState
 
+    private val _activeBusinessId = MutableStateFlow(
+        CloudBusinessAuth.getStoredBusinessId(application) ?: ""
+    )
+    val activeBusinessId: StateFlow<String> = _activeBusinessId.asStateFlow()
+
+    fun getActiveBusinessId(): String {
+        val stored = CloudBusinessAuth.getStoredBusinessId(getApplication())
+        if (!stored.isNullOrBlank()) return stored
+        val current = _currentUser.value
+        if (current != null && current.role == UserRole.ADMIN) {
+            val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+            val id = fUid ?: current.id
+            CloudBusinessAuth.setStoredBusinessId(getApplication(), id, role = UserRole.ADMIN.name)
+            _activeBusinessId.value = id
+            return id
+        }
+        return ""
+    }
+
+    fun refreshActiveBusinessId() {
+        _activeBusinessId.value = getActiveBusinessId()
+    }
+
     fun triggerSync(onResult: (Boolean, String) -> Unit = { _, _ -> }) {
         syncManager.triggerSync(onResult)
+    }
+
+    fun connectSalesmanToBusiness(businessId: String, onResult: (Boolean, String) -> Unit) {
+        val cleanBizId = businessId.trim()
+        if (cleanBizId.isBlank()) {
+            onResult(false, "সঠিক ক্লাউড বিজনেস আইডি দিন!")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val fUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                if (fUser == null || fUser.uid.isBlank()) {
+                    onResult(false, "ক্লাউড ব্যবসার সাথে যুক্ত হতে গুগল সাইন-ইন আবশ্যক!")
+                    return@launch
+                }
+
+                val firestore = FirebaseFirestore.getInstance()
+                val bizDoc = firestore.collection("businesses").document(cleanBizId).get().await()
+                if (!bizDoc.exists()) {
+                    onResult(false, "এই বিজনেস আইডি ($cleanBizId) খুঁজে পাওয়া যায়নি! সঠিক আইডি লিখুন।")
+                    return@launch
+                }
+
+                val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
+                val user = _currentUser.value
+
+                // 1. Write/Link active staff profile in Firestore under this business
+                val staffDocRef = firestore.collection("businesses").document(cleanBizId).collection("staff").document(fUser.uid)
+                val staffData = mapOf(
+                    "id" to fUser.uid,
+                    "name" to (user?.name ?: fUser.displayName ?: "সেলস প্রতিনিধি"),
+                    "phone" to (user?.phone ?: ""),
+                    "email" to (fUser.email ?: ""),
+                    "role" to UserRole.SALESMAN.name,
+                    "isActive" to true,
+                    "businessId" to cleanBizId,
+                    "linkedAt" to System.currentTimeMillis()
+                )
+                staffDocRef.set(staffData, SetOptions.merge()).await()
+
+                // 2. Also register in root staff_memberships for quick lookups
+                firestore.collection("staff_memberships").document(fUser.uid).set(
+                    mapOf(
+                        "userId" to fUser.uid,
+                        "businessId" to cleanBizId,
+                        "role" to UserRole.SALESMAN.name,
+                        "isActive" to true,
+                        "email" to (fUser.email ?: ""),
+                        "updatedAt" to System.currentTimeMillis()
+                    ),
+                    SetOptions.merge()
+                ).await()
+
+                // 3. Save in device-local preferences
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = cleanBizId,
+                    businessName = bizName,
+                    role = UserRole.SALESMAN.name
+                )
+                _activeBusinessId.value = cleanBizId
+
+                // 4. Trigger sync immediately to download products and catalog into Room
+                syncManager.triggerSync { success, msg ->
+                    if (success) {
+                        onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছে! সমস্ত পণ্য ও তালিকা সিঙ্ক সম্পন্ন।")
+                    } else {
+                        onResult(true, "ব্যবসার সাথে যুক্ত হয়েছে। সিঙ্ক বার্তা: $msg")
+                    }
+                }
+            } catch (e: Exception) {
+                onResult(false, "কানেকশন ব্যর্থ হয়েছে: ${e.localizedMessage ?: e.message}")
+            }
+        }
     }
 
     // Product Image Mode: AUTO vs MANUAL
@@ -717,12 +819,52 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     accountStatus = UserAccountStatus.ACTIVE
                 )
                 repository.saveUserDirect(adminUser)
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = uid,
+                    role = UserRole.ADMIN.name
+                )
+                _activeBusinessId.value = uid
                 _currentUser.value = adminUser
                 onResult(true, "এডমিন প্যানেলে স্বাগতম, ${adminUser.name}!", UserRole.ADMIN)
                 return@launch
             }
 
-            // 4. Unknown/unauthorized Google user: DO NOT GRANT ADMIN OR GENERAL ACCESS AUTOMATICALLY
+            // 4. Check if this Google user has a registered staff membership in Firestore
+            try {
+                val firestore = FirebaseFirestore.getInstance()
+                val memberDoc = firestore.collection("staff_memberships").document(uid).get().await()
+                if (memberDoc.exists()) {
+                    val bizId = memberDoc.getString("businessId")
+                    val roleStr = memberDoc.getString("role")
+                    val isActive = memberDoc.getBoolean("isActive") ?: false
+                    if (!bizId.isNullOrBlank() && isActive) {
+                        val role = if (roleStr == "ADMIN") UserRole.ADMIN else UserRole.SALESMAN
+                        val staffUser = User(
+                            id = uid,
+                            name = name,
+                            phone = phone.ifBlank { "01800000000" },
+                            role = role,
+                            pinHash = repository.hashPin("1234"),
+                            isActive = true,
+                            accountStatus = UserAccountStatus.ACTIVE
+                        )
+                        repository.saveUserDirect(staffUser)
+                        CloudBusinessAuth.setStoredBusinessId(
+                            context = getApplication(),
+                            businessId = bizId,
+                            role = role.name
+                        )
+                        _activeBusinessId.value = bizId
+                        _currentUser.value = staffUser
+                        triggerSync()
+                        onResult(true, "স্বাগতম, ${staffUser.name}!", role)
+                        return@launch
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // 5. Unknown/unauthorized Google user: DO NOT GRANT ADMIN OR GENERAL ACCESS AUTOMATICALLY
             _currentUser.value = null
             onResult(
                 false,
@@ -772,6 +914,15 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     )
                     repository.saveUserDirect(linkedUser)
                     _currentUser.value = linkedUser
+                    val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
+                    if (!existingBizId.isNullOrBlank()) {
+                        CloudBusinessAuth.setStoredBusinessId(
+                            context = getApplication(),
+                            businessId = existingBizId,
+                            role = linkedUser.role.name
+                        )
+                        _activeBusinessId.value = existingBizId
+                    }
                     onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে লিংক করা হয়েছে! স্বাগতম, ${linkedUser.name}!", linkedUser.role)
                 }
                 is BusinessRepository.AuthResult.Error -> {
@@ -784,6 +935,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             )
                             repository.saveUserDirect(linkedAdmin)
                             _currentUser.value = linkedAdmin
+                            CloudBusinessAuth.setStoredBusinessId(
+                                context = getApplication(),
+                                businessId = uid,
+                                role = UserRole.ADMIN.name
+                            )
+                            _activeBusinessId.value = uid
                             onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে এডমিন হিসেবে লিংক করা হয়েছে!", UserRole.ADMIN)
                         }
                         is BusinessRepository.AuthResult.Error -> {

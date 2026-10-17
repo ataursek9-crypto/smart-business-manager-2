@@ -65,6 +65,18 @@ fun SalesmanDashboardScreen(
         myExpenses.filter { it.status == ExpenseStatus.APPROVED }.sumOf { it.amount }
     }
 
+    val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
+    var showConnectDialog by remember { mutableStateOf(false) }
+    var inputBizId by remember { mutableStateOf("") }
+    var isConnecting by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshActiveBusinessId()
+        if (viewModel.getActiveBusinessId().isNotBlank()) {
+            viewModel.triggerSync()
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()

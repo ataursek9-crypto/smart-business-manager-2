@@ -32,7 +32,13 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.uid == businessId ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true)
+         get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
+        (request.auth.token.email != null &&
+         exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)) &&
+         get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true) ||
+        (exists(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.businessId == businessId &&
+         get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.isActive == true)
       );
     }
 
@@ -142,12 +148,44 @@ service cloud.firestore {
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 7. Staff Members - Owner manages staff accounts, staff can read own profile
+      // 7. Staff Members - Owner manages staff accounts, staff can read own profile & link verified staff account
       match /staff/{staffUid} {
         allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid);
-        allow list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId);
+        allow list: if isBusinessOwner(businessId) || isBusinessStaff(businessId);
+        allow create, update: if isBusinessOwner(businessId) || (
+          isSignedIn() && request.auth.uid == staffUid &&
+          incoming().isActive == true &&
+          incoming().role == 'SALESMAN' &&
+          incoming().businessId == businessId
+        );
+        allow delete: if isBusinessOwner(businessId);
       }
+
+      match /staff_by_phone/{phone} {
+        allow get: if isBusinessStaff(businessId) || isBusinessOwner(businessId);
+        allow list, create, update, delete: if isBusinessOwner(businessId);
+      }
+
+      match /staff_by_email/{email} {
+        allow get: if isSignedIn() && (request.auth.token.email == email || isBusinessOwner(businessId));
+        allow list, create, update, delete: if isBusinessOwner(businessId);
+      }
+    }
+
+    // Staff memberships index to allow salesmen on separate devices to resolve their authorized businessId
+    match /staff_memberships/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isBusinessOwner(resource.data.businessId));
+      allow list: if false;
+      allow create, update: if isSignedIn() && (
+        (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
+        (request.auth.uid == userId && incoming().businessId is string &&
+         (exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) ||
+          request.auth.uid == incoming().businessId))
+      );
+      allow delete: if isSignedIn() && (
+        request.auth.uid == userId ||
+        (resource.data.businessId is string && request.auth.uid == resource.data.businessId)
+      );
     }
   }
 }

@@ -156,6 +156,45 @@ class CloudSyncManager(
         }
     }
 
+/**
+ * Manages device-local storage of the verified multi-tenant business identity.
+ * Prevents hardcoding or fallback IDs, while ensuring salesmen on separate devices
+ * resolve to the exact business authorized by the owner.
+ */
+object CloudBusinessAuth {
+    private const val PREFS_NAME = "smart_biz_cloud_auth_prefs"
+    private const val KEY_BUSINESS_ID = "active_cloud_business_id"
+    private const val KEY_BUSINESS_NAME = "active_cloud_business_name"
+    private const val KEY_USER_ROLE = "active_cloud_user_role"
+
+    fun getStoredBusinessId(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_BUSINESS_ID, null)?.trim()?.ifBlank { null }
+    }
+
+    fun getStoredRole(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_USER_ROLE, null)?.trim()?.ifBlank { null }
+    }
+
+    fun getStoredBusinessName(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_BUSINESS_NAME, null)?.trim()?.ifBlank { null }
+    }
+
+    fun setStoredBusinessId(context: Context, businessId: String, businessName: String? = null, role: String? = null) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        editor.putString(KEY_BUSINESS_ID, businessId.trim())
+        if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
+        if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
+        editor.apply()
+    }
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+    }
+}
+
     private val scope = CoroutineScope(Dispatchers.IO)
     private val _syncState = MutableStateFlow(
         SyncState(
@@ -186,6 +225,28 @@ class CloudSyncManager(
     }
 
     /**
+     * Checks if current active session belongs to a salesman (staff) rather than admin (owner).
+     */
+    suspend fun isCurrentActiveSalesman(): Boolean {
+        val authUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+        if (authUser != null) {
+            val email = authUser.email?.trim()?.lowercase() ?: ""
+            if (email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local") {
+                return false
+            }
+            val localUser = db.userDao().getUserById(authUser.uid)
+            if (localUser != null) {
+                return localUser.role == UserRole.SALESMAN
+            }
+        }
+        val storedRole = CloudBusinessAuth.getStoredRole(context)
+        if (storedRole != null) {
+            return storedRole == UserRole.SALESMAN.name
+        }
+        return false
+    }
+
+    /**
      * Resolves the secure multi-tenant business ID for cloud isolation under /businesses/{businessId}/.
      * Enforces strict authentication: never returns a fallback ID when unauthenticated.
      */
@@ -202,7 +263,63 @@ class CloudSyncManager(
         if (authUser.uid.isBlank()) {
             throw IllegalStateException("অবৈধ ইউজার আইডি। ক্লাউড সিঙ্ক বাতিল করা হয়েছে।")
         }
-        return authUser.uid
+
+        val email = authUser.email?.trim()?.lowercase() ?: ""
+        val isOwner = email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" ||
+                CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
+
+        if (isOwner) {
+            CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
+            return authUser.uid
+        }
+
+        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
+        if (!storedBizId.isNullOrBlank()) {
+            return storedBizId
+        }
+
+        throw IllegalStateException("অননুমোদিত স্টাফ ডিভাইস: কোনো অনুমোদিত ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে অ্যাডমিনের বিজনেস আইডি দিয়ে কানেক্ট করুন।")
+    }
+
+    suspend fun resolveOrFetchBusinessId(): String {
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            throw IllegalStateException("ফায়ারবেস কনফিগারেশন অনুপস্থিত (google-services.json প্রয়োজন)।")
+        }
+        val authUser = try {
+            FirebaseAuth.getInstance().currentUser
+        } catch (e: Exception) {
+            null
+        } ?: throw IllegalStateException("ক্লাউড সিঙ্ক করার জন্য গুগল একাউন্টে প্রমাণীকরণ আবশ্যক।")
+
+        val email = authUser.email?.trim()?.lowercase() ?: ""
+        val isOwner = email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" ||
+                CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
+
+        if (isOwner) {
+            CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
+            return authUser.uid
+        }
+
+        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
+        if (!storedBizId.isNullOrBlank()) {
+            return storedBizId
+        }
+
+        // Attempt remote lookup in Firestore staff_memberships/{authUser.uid}
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val doc = firestore.collection("staff_memberships").document(authUser.uid).get().awaitResult()
+            if (doc.exists()) {
+                val bizId = doc.getString("businessId")
+                val isActive = doc.getBoolean("isActive") ?: false
+                if (!bizId.isNullOrBlank() && isActive) {
+                    CloudBusinessAuth.setStoredBusinessId(context, bizId, role = UserRole.SALESMAN.name)
+                    return bizId
+                }
+            }
+        } catch (_: Exception) {}
+
+        throw IllegalStateException("অননুমোদিত স্টাফ ডিভাইস: কোনো অনুমোদিত ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে অ্যাডমিনের বিজনেস আইডি দিয়ে কানেক্ট করুন।")
     }
 
     /**
@@ -303,13 +420,17 @@ class CloudSyncManager(
         }
 
         val firestore = FirebaseFirestore.getInstance()
-        val businessId = resolveBusinessId()
+        val businessId = resolveOrFetchBusinessId()
+        val isSalesman = isCurrentActiveSalesman()
+
+        // 0. Synchronize Business Profile & Staff Membership
+        syncBusinessAndStaff(firestore, businessId, isSalesman)
 
         // 1. Synchronize Deletion Tombstones first to protect against resurrecting deleted items
-        syncTombstones(firestore, businessId)
+        syncTombstones(firestore, businessId, isSalesman)
 
         // 2. Synchronize Products with stock and cost protection
-        syncProducts(firestore, businessId)
+        syncProducts(firestore, businessId, isSalesman)
 
         // 3. Synchronize Customers and due balances
         syncCustomers(firestore, businessId)
@@ -324,22 +445,82 @@ class CloudSyncManager(
         syncExpenses(firestore, businessId)
     }
 
-    private suspend fun syncTombstones(firestore: FirebaseFirestore, businessId: String) {
+    private suspend fun syncBusinessAndStaff(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
+        val bizDocRef = firestore.collection("businesses").document(businessId)
+
+        if (!isSalesman) {
+            val authUser = FirebaseAuth.getInstance().currentUser
+            val settings = db.companySettingsDao().getSettings() ?: CompanySettings()
+            val bizData = mapOf(
+                "id" to businessId,
+                "ownerUid" to (authUser?.uid ?: businessId),
+                "businessName" to settings.businessName,
+                "phone" to settings.phone,
+                "address" to settings.address,
+                "currencySymbol" to settings.currencySymbol,
+                "updatedAt" to System.currentTimeMillis()
+            )
+            bizDocRef.set(bizData, SetOptions.merge()).awaitResult()
+
+            // Admin syncs active staff to Firestore under /businesses/{businessId}/staff/
+            val activeUsers = db.userDao().getAllActiveUsersList()
+            for (user in activeUsers) {
+                if (user.role == UserRole.SALESMAN) {
+                    val staffData = mapOf(
+                        "id" to user.id,
+                        "name" to user.name,
+                        "phone" to user.phone,
+                        "role" to user.role.name,
+                        "isActive" to (user.isActive && user.accountStatus == UserAccountStatus.ACTIVE),
+                        "canDiscount" to user.canDiscount,
+                        "businessId" to businessId,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
+                    bizDocRef.collection("staff").document(user.id).set(staffData, SetOptions.merge()).awaitResult()
+                    if (user.phone.isNotBlank()) {
+                        bizDocRef.collection("staff_by_phone").document(user.phone.trim()).set(staffData, SetOptions.merge()).awaitResult()
+                    }
+                }
+            }
+        } else {
+            // Salesman fetches business profile and syncs business name
+            try {
+                val bizDoc = bizDocRef.get().awaitResult()
+                if (bizDoc.exists()) {
+                    val bName = bizDoc.getString("businessName")
+                    val bPhone = bizDoc.getString("phone")
+                    if (!bName.isNullOrBlank()) {
+                        val currentSettings = db.companySettingsDao().getSettings() ?: CompanySettings()
+                        db.companySettingsDao().insertOrUpdate(
+                            currentSettings.copy(
+                                businessName = bName,
+                                phone = bPhone ?: currentSettings.phone
+                            )
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun syncTombstones(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("tombstones")
 
-        // Upload local tombstones
-        val localTombstones = db.recycleBinDao().getSyncTombstones()
-        for (item in localTombstones) {
-            val tombstone = Tombstone(
-                id = item.id,
-                tableName = item.originalTable,
-                originalId = item.originalId,
-                deletedAt = item.deletedAt,
-                isPermanent = item.deleteReason.contains("Tombstone", ignoreCase = true),
-                deletedByUserId = item.deletedByAdminId
-            )
-            val data = mapTombstoneToCloud(tombstone, businessId)
-            collection.document(tombstone.id).set(data, SetOptions.merge()).awaitResult()
+        // Upload local tombstones (Only Admin can create/update tombstones)
+        if (!isSalesman) {
+            val localTombstones = db.recycleBinDao().getSyncTombstones()
+            for (item in localTombstones) {
+                val tombstone = Tombstone(
+                    id = item.id,
+                    tableName = item.originalTable,
+                    originalId = item.originalId,
+                    deletedAt = item.deletedAt,
+                    isPermanent = item.deleteReason.contains("Tombstone", ignoreCase = true),
+                    deletedByUserId = item.deletedByAdminId
+                )
+                val data = mapTombstoneToCloud(tombstone, businessId)
+                collection.document(tombstone.id).set(data, SetOptions.merge()).awaitResult()
+            }
         }
 
         // Download remote tombstones
@@ -370,17 +551,19 @@ class CloudSyncManager(
         }
     }
 
-    private suspend fun syncProducts(firestore: FirebaseFirestore, businessId: String) {
+    private suspend fun syncProducts(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("products")
 
-        // 1. Upload local real products
-        val localProducts = db.productDao().getSyncProducts()
-        for (product in localProducts) {
-            val data = mapProductToCloud(product, businessId, isSalesman = false)
-            collection.document(product.id).set(data, SetOptions.merge()).awaitResult()
+        // 1. Upload local real products: STRICTLY OWNER / ADMIN ONLY
+        if (!isSalesman) {
+            val localProducts = db.productDao().getSyncProducts()
+            for (product in localProducts) {
+                val data = mapProductToCloud(product, businessId, isSalesman = false)
+                collection.document(product.id).set(data, SetOptions.merge()).awaitResult()
+            }
         }
 
-        // 2. Download and merge remote products
+        // 2. Download and merge remote products: BOTH ADMIN AND SALESMAN DOWNLOAD
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
             val id = doc.getString("id") ?: doc.id
@@ -417,7 +600,8 @@ class CloudSyncManager(
                         unit = unit,
                         isActive = isActive,
                         updatedAt = updatedAt,
-                        purchasePrice = remotePurchasePrice ?: localProduct.purchasePrice
+                        // Purchase price protection: salesman never overwrites or gets exposed to purchase cost
+                        purchasePrice = if (isSalesman) (localProduct.purchasePrice.takeIf { it > 0 } ?: 0.0) else (remotePurchasePrice ?: localProduct.purchasePrice)
                     )
                     db.productDao().updateProduct(merged)
                 }
@@ -428,7 +612,7 @@ class CloudSyncManager(
                     sku = sku,
                     barcode = barcode,
                     category = category,
-                    purchasePrice = remotePurchasePrice ?: 0.0,
+                    purchasePrice = if (isSalesman) 0.0 else (remotePurchasePrice ?: 0.0),
                     sellingPrice = sellingPrice,
                     currentStock = currentStock,
                     alertStockLevel = alertStockLevel,
@@ -438,7 +622,6 @@ class CloudSyncManager(
                     isTestData = false
                 )
                 db.productDao().insertProduct(newProduct)
-            }
         }
     }
 

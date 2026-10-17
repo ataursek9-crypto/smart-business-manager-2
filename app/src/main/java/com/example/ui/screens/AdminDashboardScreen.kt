@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.content.ClipboardManager
+import android.content.ClipData
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -72,6 +75,11 @@ fun AdminDashboardScreen(
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val isDefaultAdminPinActive by viewModel.isDefaultAdminPinActive.collectAsStateWithLifecycle()
     val adminName = BengaliFormatter.formatAdminDisplayName(currentUser?.name)
+    val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshActiveBusinessId()
+    }
 
     var showChangeCredentialsDialog by remember { mutableStateOf(false) }
 
@@ -203,6 +211,57 @@ fun AdminDashboardScreen(
                                     contentDescription = "AI সহকারী",
                                     tint = AccentAmber
                                 )
+                            }
+                    }
+
+                    if (activeBizId.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = 0.15f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_business_id_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Cloud, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column {
+                                        Text(
+                                            text = "ক্লাউড বিজনেস কোড (সেলসম্যানের সাথে শেয়ার করুন):",
+                                            color = Color.White.copy(alpha = 0.85f),
+                                            fontSize = 10.sp
+                                        )
+                                        Text(
+                                            text = activeBizId,
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("Business ID", activeBizId))
+                                        Toast.makeText(context, "বিজনেস আইডি কপি করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("কপি", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
