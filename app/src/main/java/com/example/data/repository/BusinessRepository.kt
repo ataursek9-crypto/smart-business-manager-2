@@ -183,7 +183,9 @@ class BusinessRepository(
                         totalBilled = 15000.0,
                         totalPaid = 10000.0,
                         currentDue = 5000.0,
-                        isPinned = true
+                        isPinned = true,
+                        isTestData = true,
+                        testTag = "SAMPLE_SEED"
                     ),
                     Customer(
                         id = "c_2",
@@ -193,7 +195,9 @@ class BusinessRepository(
                         totalBilled = 8500.0,
                         totalPaid = 8500.0,
                         currentDue = 0.0,
-                        isPinned = false
+                        isPinned = false,
+                        isTestData = true,
+                        testTag = "SAMPLE_SEED"
                     ),
                     Customer(
                         id = "c_3",
@@ -203,7 +207,9 @@ class BusinessRepository(
                         totalBilled = 22000.0,
                         totalPaid = 14000.0,
                         currentDue = 8000.0,
-                        isPinned = false
+                        isPinned = false,
+                        isTestData = true,
+                        testTag = "SAMPLE_SEED"
                     )
                 )
                 sampleCustomers.forEach { db.customerDao().insertCustomer(it) }
@@ -2161,8 +2167,15 @@ class BusinessRepository(
 
             val reasons = mutableListOf<String>()
 
-            // 1. Check for confirmed test indicators
-            val isExplicitTest = cust.isTestData ||
+            // 1. Check for initial template demo seed data (c_1, c_2, c_3)
+            val isSeedSample = cust.testTag == "SAMPLE_SEED" ||
+                    cust.id in listOf("c_1", "c_2", "c_3") ||
+                    cust.phone in listOf("01911223344", "01833445566", "01722334455") ||
+                    (cust.name in listOf("মেসার্স হাজী ব্রাদার্স", "জননী স্টোর (কালাম ভাই)", "ভাই ভাই এন্টারপ্রাইজ") && sales.isEmpty())
+
+            // 2. Check for confirmed test indicators
+            val isExplicitTest = !isSeedSample && (
+                    cust.isTestData ||
                     (cust.testTag.isNotBlank() && cust.testTag != "NONE") ||
                     cust.id.startsWith("test_") ||
                     cust.id.startsWith("demo_") ||
@@ -2173,15 +2186,15 @@ class BusinessRepository(
                     cust.name.contains("টেস্ট কাস্টমার", ignoreCase = true) ||
                     cust.name.contains("test customer", ignoreCase = true) ||
                     (sales.isNotEmpty() && sales.all { it.isTestData || it.invoiceNumber.startsWith("INV-TEST") })
-
-            // 2. Check for initial template demo seed data (c_1, c_2, c_3)
-            val isSeedSample = !isExplicitTest && (
-                    cust.id in listOf("c_1", "c_2", "c_3") ||
-                    cust.phone in listOf("01911223344", "01833445566", "01722334455") ||
-                    (cust.name in listOf("মেসার্স হাজী ব্রাদার্স", "জননী স্টোর (কালাম ভাই)", "ভাই ভাই এন্টারপ্রাইজ") && sales.isEmpty())
             )
 
             val category = when {
+                isSeedSample -> {
+                    reasons.add("অ্যাপ ইনস্টলেশনের প্রারম্ভিক ডেমো/নমুনা ডেটাসেট (Template Seed Data)")
+                    if (cust.id in listOf("c_1", "c_2", "c_3")) reasons.add("ডিফল্ট ডেমো আইডি: ${cust.id}")
+                    if (sales.isEmpty()) reasons.add("কোনো বাস্তব বিক্রয় ইনভয়েস নেই (শুধুমাত্র প্রারম্ভিক ডেমো ব্যালেন্স)")
+                    DueCustomerCategory.SAMPLE_SEED_DATA
+                }
                 isExplicitTest -> {
                     if (cust.isTestData) reasons.add("সিস্টেম টেস্ট ফ্ল্যাগ সক্রিয় (isTestData=true)")
                     if (cust.testTag.isNotBlank() && cust.testTag != "NONE") reasons.add("টেস্ট ট্যাগ: ${cust.testTag}")
@@ -2189,12 +2202,6 @@ class BusinessRepository(
                     if (cust.name.contains("টেস্ট", ignoreCase = true) || cust.name.contains("test", ignoreCase = true)) reasons.add("কাস্টমারের নামে টেস্ট লেবেল যুক্ত")
                     if (sales.isNotEmpty() && sales.all { it.isTestData || it.invoiceNumber.startsWith("INV-TEST") }) reasons.add("সকল বিক্রয় ইনভয়েস টেস্ট চালান")
                     DueCustomerCategory.CONFIRMED_TEST
-                }
-                isSeedSample -> {
-                    reasons.add("অ্যাপ ইনস্টলেশনের প্রারম্ভিক ডেমো/নমুনা ডেটাসেট (Template Seed Data)")
-                    if (cust.id in listOf("c_1", "c_2", "c_3")) reasons.add("ডিফল্ট ডেমো আইডি: ${cust.id}")
-                    if (sales.isEmpty()) reasons.add("কোনো বাস্তব বিক্রয় ইনভয়েস নেই (শুধুমাত্র প্রারম্ভিক ডেমো ব্যালেন্স)")
-                    DueCustomerCategory.SAMPLE_SEED_DATA
                 }
                 else -> {
                     reasons.add("সতর্কতা: কোনো স্পষ্ট টেস্ট চিহ্ন পাওয়া যায়নি")

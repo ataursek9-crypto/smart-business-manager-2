@@ -917,6 +917,7 @@ object CloudBusinessAuth {
             digits.startsWith("880") -> "0" + digits.substring(3)
             digits.startsWith("+88") -> digits.substring(3)
             digits.startsWith("88") && digits.length > 11 -> digits.substring(2)
+            digits.length == 10 && digits.startsWith("1") -> "0$digits"
             else -> digits
         }
     }

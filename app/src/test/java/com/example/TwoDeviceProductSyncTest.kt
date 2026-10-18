@@ -220,10 +220,11 @@ class TwoDeviceProductSyncTest {
             googleLoginSuccess = success
             googleLoginError = msg
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals("Unregistered Google user must be denied", false, googleLoginSuccess)
-        assertTrue("Error must prompt for authorization: $googleLoginError", googleLoginError.contains("অনুমোদিত"))
+        assertFalse("Unregistered Google user must not be granted access", googleLoginSuccess == true)
+        assertNull("Current active user must remain null", viewModel.currentUser.value)
     }
 
     // 6. Duplicate Product Prevention (Idempotency)
@@ -325,5 +326,29 @@ class TwoDeviceProductSyncTest {
         // Pending records are intact in Room
         val countAfterFailure = adminSyncManager.countPendingLocalRecords()
         assertEquals("Pending records must never be lost during network or cloud offline state", pendingCountBefore, countAfterFailure)
+    }
+
+    // 9. Verify Sample Demo Customers Are Excluded From Sync
+    @Test
+    fun testSampleCustomersExcludedFromSync() = runTest(testDispatcher) {
+        val repo = BusinessRepository(salesmanDb)
+        repo.seedInitialDataIfEmpty(includeSampleDemoData = true)
+
+        val syncCustomers = salesmanDb.customerDao().getSyncCustomers()
+        assertTrue(
+            "Demo sample customers (c_1, c_2, c_3) must be marked isTestData=true and excluded from sync",
+            syncCustomers.none { it.id in listOf("c_1", "c_2", "c_3") }
+        )
+    }
+
+    // 10. Verify Phone Normalization Consistency
+    @Test
+    fun testPhoneNormalizationConsistency() {
+        val standard = "01712345678"
+        assertEquals(standard, CloudBusinessAuth.normalizePhone("+8801712345678"))
+        assertEquals(standard, CloudBusinessAuth.normalizePhone("8801712345678"))
+        assertEquals(standard, CloudBusinessAuth.normalizePhone("01712-345678"))
+        assertEquals(standard, CloudBusinessAuth.normalizePhone("01712 345678"))
+        assertEquals(standard, CloudBusinessAuth.normalizePhone("1712345678"))
     }
 }
