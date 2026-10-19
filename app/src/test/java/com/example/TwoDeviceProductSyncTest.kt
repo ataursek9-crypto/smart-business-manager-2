@@ -351,4 +351,19 @@ class TwoDeviceProductSyncTest {
         assertEquals(standard, CloudBusinessAuth.normalizePhone("01712 345678"))
         assertEquals(standard, CloudBusinessAuth.normalizePhone("1712345678"))
     }
+
+    // 11. Verify Business Linking Input Validation
+    @Test
+    fun testBusinessLinkingInputValidation() = runTest(testDispatcher) {
+        val vm = BusinessViewModel(app)
+        var called = false
+        var errMsg = ""
+        vm.connectSalesmanToBusiness("", "01712345678", "1234") { success, msg ->
+            called = true
+            assertFalse(success)
+            errMsg = msg
+        }
+        assertTrue(called)
+        assertTrue(errMsg.contains("কোড"))
+    }
 }

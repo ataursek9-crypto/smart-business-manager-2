@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -108,23 +109,40 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             return
         }
         viewModelScope.launch {
+            val fUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+            if (fUser == null || fUser.uid.isBlank()) {
+                onResult(false, "ক্লাউড ব্যবসার সাথে যুক্ত হতে গুগল সাইন-ইন আবশ্যক!")
+                return@launch
+            }
+
+            val firestore = FirebaseFirestore.getInstance()
+
+            // Step 1: Verify business doc exists
+            val bizDoc = try {
+                Log.i("BusinessLinking", "[ConnectFlow] Step 1: Reading business doc /businesses/$cleanBizId")
+                firestore.collection("businesses").document(cleanBizId).get().await()
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[ConnectFlow] Step 1 Failed (READ_BUSINESS_DOC): /businesses/$cleanBizId - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ১: READ /businesses] ব্যবসা কোড যাচাই অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস কনসোলে Rules পাবলিশ করা আছে কি না যাচাই করুন।"
+                } else {
+                    "[ধাপ ১: READ /businesses] ব্যবসা কোড যাচাই ব্যর্থ: $err"
+                }
+                onResult(false, msg)
+                return@launch
+            }
+
+            if (!bizDoc.exists()) {
+                onResult(false, "এই বিজনেস কোড ($cleanBizId) ক্লাউডে পাওয়া যায়নি! সঠিক কোড লিখুন।")
+                return@launch
+            }
+
+            val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
+
+            // Step 2: Check if user is already an actively linked staff in Firestore
             try {
-                val fUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-                if (fUser == null || fUser.uid.isBlank()) {
-                    onResult(false, "ক্লাউড ব্যবসার সাথে যুক্ত হতে গুগল সাইন-ইন আবশ্যক!")
-                    return@launch
-                }
-
-                val firestore = FirebaseFirestore.getInstance()
-                val bizDoc = firestore.collection("businesses").document(cleanBizId).get().await()
-                if (!bizDoc.exists()) {
-                    onResult(false, "এই বিজনেস কোড ($cleanBizId) ক্লাউডে পাওয়া যায়নি! সঠিক কোড লিখুন।")
-                    return@launch
-                }
-
-                val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
-
-                // 1. Check if user is already an actively linked staff in Firestore
+                Log.i("BusinessLinking", "[ConnectFlow] Step 2: Checking existing staff link under /businesses/$cleanBizId/staff/${fUser.uid}")
                 val existingStaffDoc = firestore.collection("businesses").document(cleanBizId)
                     .collection("staff").document(fUser.uid).get().await()
                 if (existingStaffDoc.exists() && (existingStaffDoc.getBoolean("isActive") == true)) {
@@ -160,52 +178,70 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     }
                     return@launch
                 }
+            } catch (e: Exception) {
+                Log.w("BusinessLinking", "[ConnectFlow] Existing staff check non-fatal note: ${e.message}")
+            }
 
-                // 2. Not yet linked by UID: Require registered Phone & PIN for strict security verification
-                val rawPhone = cleanPhone.ifBlank { _currentUser.value?.phone ?: "" }
-                val resolvedPhone = CloudBusinessAuth.normalizePhone(rawPhone)
-                val resolvedPin = cleanPin
+            // Step 3: Require registered Phone & PIN for strict security verification
+            val rawPhone = cleanPhone.ifBlank { _currentUser.value?.phone ?: "" }
+            val resolvedPhone = CloudBusinessAuth.normalizePhone(rawPhone)
+            val resolvedPin = cleanPin
 
-                if (resolvedPhone.isBlank() || resolvedPin.isBlank()) {
-                    onResult(false, "অনুমোদন ত্রুটি: অ্যাডমিন কর্তৃক নিবন্ধিত মোবাইল নম্বর এবং গোপন পিন কোড দিন!")
-                    return@launch
-                }
+            if (resolvedPhone.isBlank() || resolvedPin.isBlank()) {
+                onResult(false, "অনুমোদন ত্রুটি: অ্যাডমিন কর্তৃক নিবন্ধিত মোবাইল নম্বর এবং গোপন পিন কোড দিন!")
+                return@launch
+            }
 
-                val staffPhoneDoc = firestore.collection("businesses").document(cleanBizId)
+            Log.i("BusinessLinking", "[ConnectFlow] Step 3: Verifying staff in /businesses/$cleanBizId/staff_by_phone")
+            val staffPhoneDoc = try {
+                firestore.collection("businesses").document(cleanBizId)
                     .collection("staff_by_phone").document(resolvedPhone).get().await()
-
-                if (!staffPhoneDoc.exists()) {
-                    onResult(false, "অননুমোদিত স্টাফ: মোবাইল নম্বরটি ($resolvedPhone) অ্যাডমিন কর্তৃক ক্লাউডে নিবন্ধিত করা হয়নি। অ্যাডমিনকে ফোনে অ্যাপে গিয়ে স্টাফ নম্বর যোগ এবং ক্লাউড সিঙ্ক করতে বলুন।")
-                    return@launch
-                }
-
-                val isActive = staffPhoneDoc.getBoolean("isActive") ?: false
-                if (!isActive) {
-                    onResult(false, "এই স্টাফ অ্যাকাউন্টটি নিষ্ক্রিয় বা স্থগিত করা হয়েছে। অ্যাডমিনের সাথে যোগাযোগ করুন।")
-                    return@launch
-                }
-
-                // Cryptographic PIN verification
-                val expectedPinHash = staffPhoneDoc.getString("pinHash")
-                val providedPinHash = repository.hashPin(resolvedPin)
-                val localAuth = repository.authenticateUser(resolvedPhone, resolvedPin)
-
-                val isPinValid = if (!expectedPinHash.isNullOrBlank()) {
-                    expectedPinHash == providedPinHash
-                } else if (localAuth is BusinessRepository.AuthResult.Success) {
-                    true
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[ConnectFlow] Step 3 Failed (READ_STAFF_BY_PHONE): /businesses/$cleanBizId/staff_by_phone - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ৩: READ /staff_by_phone] স্টাফ নম্বর যাচাই অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস রুলসে staff_by_phone পড়ার অনুমতি নেই।"
                 } else {
-                    resolvedPin == "1234"
+                    "[ধাপ ৩: READ /staff_by_phone] স্টাফ নম্বর যাচাই ব্যর্থ: $err"
                 }
+                onResult(false, msg)
+                return@launch
+            }
 
-                if (!isPinValid) {
-                    onResult(false, "ভুল পিন কোড! অ্যাডমিনের দেওয়া সঠিক পিন কোড দিয়ে চেষ্টা করুন।")
-                    return@launch
-                }
+            if (!staffPhoneDoc.exists()) {
+                onResult(false, "অননুমোদিত স্টাফ: মোবাইল নম্বরটি ($resolvedPhone) অ্যাডমিন ক্লাউডে নিবন্ধন করেননি অথবা অ্যাডমিন ফোন থেকে এখনও 'ক্লাউড সিঙ্ক' করা হয়নি। অ্যাডমিনকে ফোনে গিয়ে স্টাফ নম্বর যোগ এবং ক্লাউড সিঙ্ক করতে বলুন।")
+                return@launch
+            }
 
-                val staffName = staffPhoneDoc.getString("name") ?: (fUser.displayName ?: "সেলস প্রতিনিধি")
+            val isActive = staffPhoneDoc.getBoolean("isActive") ?: false
+            if (!isActive) {
+                onResult(false, "এই স্টাফ অ্যাকাউন্টটি নিষ্ক্রিয় বা স্থগিত করা হয়েছে। অ্যাডমিনের সাথে যোগাযোগ করুন।")
+                return@launch
+            }
 
-                // 3. Register active staff profile in Firestore under /businesses/{cleanBizId}/staff/{fUser.uid}
+            // Cryptographic PIN verification
+            val expectedPinHash = staffPhoneDoc.getString("pinHash")
+            val providedPinHash = repository.hashPin(resolvedPin)
+            val localAuth = repository.authenticateUser(resolvedPhone, resolvedPin)
+
+            val isPinValid = if (!expectedPinHash.isNullOrBlank()) {
+                expectedPinHash == providedPinHash
+            } else if (localAuth is BusinessRepository.AuthResult.Success) {
+                true
+            } else {
+                resolvedPin == "1234"
+            }
+
+            if (!isPinValid) {
+                onResult(false, "ভুল পিন কোড! অ্যাডমিনের দেওয়া সঠিক পিন কোড দিয়ে চেষ্টা করুন।")
+                return@launch
+            }
+
+            val staffName = staffPhoneDoc.getString("name") ?: (fUser.displayName ?: "সেলস প্রতিনিধি")
+
+            // Step 4: Register active staff profile in Firestore under /businesses/{cleanBizId}/staff/{fUser.uid}
+            Log.i("BusinessLinking", "[ConnectFlow] Step 4: Writing staff profile /businesses/$cleanBizId/staff/${fUser.uid}")
+            try {
                 val staffDocRef = firestore.collection("businesses").document(cleanBizId)
                     .collection("staff").document(fUser.uid)
                 val staffData = mapOf(
@@ -219,8 +255,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     "linkedAt" to System.currentTimeMillis()
                 )
                 staffDocRef.set(staffData, SetOptions.merge()).await()
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[ConnectFlow] Step 4 Failed (WRITE_STAFF_PROFILE): /businesses/$cleanBizId/staff/${fUser.uid} - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ৪: WRITE /staff] স্টাফ প্রোফাইল তৈরি অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস সিকিউরিটি রুলস অনুযায়ী স্টাফ লিঙ্ক করার অনুমতি মেলেনি।"
+                } else {
+                    "[ধাপ ৪: WRITE /staff] স্টাফ প্রোফাইল সংরক্ষণ ব্যর্থ: $err"
+                }
+                onResult(false, msg)
+                return@launch
+            }
 
-                // 4. Register in root /staff_memberships/{fUser.uid} with phone for membership verification
+            // Step 5: Register in root /staff_memberships/{fUser.uid} with phone for membership verification
+            Log.i("BusinessLinking", "[ConnectFlow] Step 5: Writing staff membership /staff_memberships/${fUser.uid}")
+            try {
                 firestore.collection("staff_memberships").document(fUser.uid).set(
                     mapOf(
                         "userId" to fUser.uid,
@@ -233,44 +282,48 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     ),
                     SetOptions.merge()
                 ).await()
-
-                // 5. Store locally and update session
-                CloudBusinessAuth.setStoredBusinessId(
-                    context = getApplication(),
-                    businessId = cleanBizId,
-                    businessName = bizName,
-                    role = UserRole.SALESMAN.name
-                )
-                _activeBusinessId.value = cleanBizId
-
-                val localUser = User(
-                    id = fUser.uid,
-                    name = staffName,
-                    phone = resolvedPhone,
-                    role = UserRole.SALESMAN,
-                    pinHash = providedPinHash,
-                    isActive = true,
-                    accountStatus = UserAccountStatus.ACTIVE
-                )
-                repository.saveUserDirect(localUser)
-                _currentUser.value = localUser
-
-                // 6. Trigger immediate sync
-                syncManager.triggerSync { success, msg ->
-                    if (success) {
-                        onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছেন! সমস্ত পণ্য ও স্টক সিঙ্ক সম্পন্ন।")
-                    } else {
-                        onResult(true, "ব্যবসার সাথে যুক্ত হয়েছেন। সিঙ্ক বার্তা: $msg")
-                    }
-                }
             } catch (e: Exception) {
+                Log.e("BusinessLinking", "[ConnectFlow] Step 5 Failed (WRITE_STAFF_MEMBERSHIP): /staff_memberships/${fUser.uid} - ${e.message}")
                 val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
-                val friendlyMsg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
-                    "নিরাপত্তা অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস সিকিউরিটি রুলস অনুযায়ী অনুমোদন মেলেনি। অ্যাডমিন আপনাকে এই ব্যবসায় সেলসম্যান হিসেবে যুক্ত করেছেন কি না এবং ফায়ারবেসে Rules পাবলিশ করা আছে কি না যাচাই করুন।"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ৫: WRITE /staff_memberships] স্টাফ মেম্বারশিপ ইনডেক্স অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস রুলসে /staff_memberships আপডেট ব্লক করা হয়েছে।"
                 } else {
-                    "কানেকশন ব্যর্থ হয়েছে: $err"
+                    "[ধাপ ৫: WRITE /staff_memberships] স্টাফ মেম্বারশিপ সংরক্ষণ ব্যর্থ: $err"
                 }
-                onResult(false, friendlyMsg)
+                onResult(false, msg)
+                return@launch
+            }
+
+            // Step 6: Store locally and update session
+            Log.i("BusinessLinking", "[ConnectFlow] Step 6: Updating session and local Room database")
+            CloudBusinessAuth.setStoredBusinessId(
+                context = getApplication(),
+                businessId = cleanBizId,
+                businessName = bizName,
+                role = UserRole.SALESMAN.name
+            )
+            _activeBusinessId.value = cleanBizId
+
+            val localUser = User(
+                id = fUser.uid,
+                name = staffName,
+                phone = resolvedPhone,
+                role = UserRole.SALESMAN,
+                pinHash = providedPinHash,
+                isActive = true,
+                accountStatus = UserAccountStatus.ACTIVE
+            )
+            repository.saveUserDirect(localUser)
+            _currentUser.value = localUser
+
+            // Step 7: Trigger immediate sync
+            Log.i("BusinessLinking", "[ConnectFlow] Step 7: Triggering cloud sync")
+            syncManager.triggerSync { success, msg ->
+                if (success) {
+                    onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছেন! সমস্ত পণ্য ও স্টক সিঙ্ক সম্পন্ন।")
+                } else {
+                    onResult(true, "ব্যবসার সাথে যুক্ত হয়েছেন। সিঙ্ক বার্তা: $msg")
+                }
             }
         }
     }
@@ -1016,53 +1069,123 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
 
-            try {
-                val firestore = FirebaseFirestore.getInstance()
+            val firestore = FirebaseFirestore.getInstance()
 
-                // 1. Verify business document exists in Firestore
-                val bizDoc = firestore.collection("businesses").document(cleanBizId).get().await()
-                if (!bizDoc.exists()) {
-                    onResult(false, "এই বিজনেস কোড ($cleanBizId) ক্লাউডে পাওয়া যায়নি! অ্যাডমিনের সঠিক কোড দিন।", null)
-                    return@launch
-                }
-                val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
-
-                // 2. Verify staff authorization: check local user or Firestore staff_by_phone
-                var isAuthorized = false
-                var staffRole = UserRole.SALESMAN
-                var staffName = firebaseUser.displayName ?: "সেলস প্রতিনিধি"
-
-                val localAuth = repository.authenticateUser(cleanPhone, cleanPin)
-                if (localAuth is BusinessRepository.AuthResult.Success) {
-                    isAuthorized = true
-                    staffRole = localAuth.user.role
-                    if (localAuth.user.name.isNotBlank()) staffName = localAuth.user.name
+            // Step 1: Verify business document exists in Firestore
+            val bizDoc = try {
+                Log.i("BusinessLinking", "[LinkFlow] Step 1: Reading business doc /businesses/$cleanBizId")
+                firestore.collection("businesses").document(cleanBizId).get().await()
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[LinkFlow] Step 1 Failed (READ_BUSINESS_DOC): /businesses/$cleanBizId - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ১: READ /businesses] ব্যবসা কোড যাচাই অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস কনসোলে Rules পাবলিশ করা আছে কি না যাচাই করুন।"
                 } else {
-                    // Check remote Firestore staff_by_phone under this business
-                    try {
-                        val staffPhoneDoc = firestore.collection("businesses").document(cleanBizId)
-                            .collection("staff_by_phone").document(cleanPhone).get().await()
-                        if (staffPhoneDoc.exists()) {
-                            val isActive = staffPhoneDoc.getBoolean("isActive") ?: true
-                            if (isActive) {
-                                val expectedPinHash = staffPhoneDoc.getString("pinHash")
-                                val providedPinHash = repository.hashPin(cleanPin)
-                                if (expectedPinHash.isNullOrBlank() || expectedPinHash == providedPinHash) {
-                                    isAuthorized = true
-                                    val remoteName = staffPhoneDoc.getString("name")
-                                    if (!remoteName.isNullOrBlank()) staffName = remoteName
-                                }
-                            }
-                        }
-                    } catch (_: Exception) {}
+                    "[ধাপ ১: READ /businesses] ব্যবসা কোড যাচাই ব্যর্থ: $err"
                 }
+                onResult(false, msg, null)
+                return@launch
+            }
 
-                if (!isAuthorized) {
-                    onResult(false, "অননুমোদিত স্টাফ: মোবাইল নম্বর ($cleanPhone) বা পিন মেলেনি। অ্যাডমিনকে ফোনে অ্যাপে গিয়ে স্টাফ নম্বর যোগ এবং ক্লাউড সিঙ্ক করতে বলুন।", null)
+            if (!bizDoc.exists()) {
+                onResult(false, "এই বিজনেস কোড ($cleanBizId) ক্লাউডে পাওয়া যায়নি! অ্যাডমিনের সঠিক কোড দিন।", null)
+                return@launch
+            }
+            val bizName = bizDoc.getString("businessName") ?: "স্মার্ট বিজনেস"
+
+            // Optional check: if user is already an actively linked staff in Firestore, link directly
+            try {
+                Log.i("BusinessLinking", "[LinkFlow] Existing staff check under /businesses/$cleanBizId/staff/${firebaseUser.uid}")
+                val existingStaffDoc = firestore.collection("businesses").document(cleanBizId)
+                    .collection("staff").document(firebaseUser.uid).get().await()
+                if (existingStaffDoc.exists() && (existingStaffDoc.getBoolean("isActive") == true)) {
+                    val staffName = existingStaffDoc.getString("name") ?: (firebaseUser.displayName ?: "সেলস প্রতিনিধি")
+                    val staffPhone = existingStaffDoc.getString("phone") ?: cleanPhone
+                    val staffRole = UserRole.SALESMAN
+
+                    CloudBusinessAuth.setStoredBusinessId(
+                        context = getApplication(),
+                        businessId = cleanBizId,
+                        businessName = bizName,
+                        role = staffRole.name
+                    )
+                    _activeBusinessId.value = cleanBizId
+
+                    val localUser = User(
+                        id = firebaseUser.uid,
+                        name = staffName,
+                        phone = staffPhone.ifBlank { "01800000000" },
+                        role = staffRole,
+                        pinHash = repository.hashPin(cleanPin.ifBlank { "1234" }),
+                        isActive = true,
+                        accountStatus = UserAccountStatus.ACTIVE
+                    )
+                    repository.saveUserDirect(localUser)
+                    _currentUser.value = localUser
+
+                    syncManager.triggerSync()
+                    onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত আছেন! স্বাগতম, ${localUser.name}!", staffRole)
                     return@launch
                 }
+            } catch (e: Exception) {
+                Log.w("BusinessLinking", "[LinkFlow] Existing staff check non-fatal note: ${e.message}")
+            }
 
-                // 3. Register active staff profile in Firestore under /businesses/{cleanBizId}/staff/{uid}
+            // Step 2: Verify staff authorization strictly against remote Firestore staff_by_phone
+            Log.i("BusinessLinking", "[LinkFlow] Step 2: Verifying staff in /businesses/$cleanBizId/staff_by_phone")
+            val staffPhoneDoc = try {
+                firestore.collection("businesses").document(cleanBizId)
+                    .collection("staff_by_phone").document(cleanPhone).get().await()
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[LinkFlow] Step 2 Failed (READ_STAFF_BY_PHONE): /businesses/$cleanBizId/staff_by_phone - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ২: READ /staff_by_phone] স্টাফ নম্বর যাচাই অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস রুলসে staff_by_phone পড়ার অনুমতি নেই।"
+                } else {
+                    "[ধাপ ২: READ /staff_by_phone] স্টাফ নম্বর যাচাই ব্যর্থ: $err"
+                }
+                onResult(false, msg, null)
+                return@launch
+            }
+
+            if (!staffPhoneDoc.exists()) {
+                onResult(
+                    false,
+                    "অননুমোদিত স্টাফ: মোবাইল নম্বরটি ($cleanPhone) অ্যাডমিন ক্লাউডে নিবন্ধন করেননি অথবা অ্যাডমিন ফোন থেকে এখনও 'ক্লাউড সিঙ্ক' করা হয়নি। অ্যাডমিনকে ফোনে গিয়ে স্টাফ নম্বর যোগ এবং ক্লাউড সিঙ্ক করতে বলুন।",
+                    null
+                )
+                return@launch
+            }
+
+            val isActive = staffPhoneDoc.getBoolean("isActive") ?: false
+            if (!isActive) {
+                onResult(false, "এই স্টাফ অ্যাকাউন্টটি নিষ্ক্রিয় বা স্থগিত করা হয়েছে। অ্যাডমিনের সাথে যোগাযোগ করুন।", null)
+                return@launch
+            }
+
+            val expectedPinHash = staffPhoneDoc.getString("pinHash")
+            val providedPinHash = repository.hashPin(cleanPin)
+            val localAuth = repository.authenticateUser(cleanPhone, cleanPin)
+
+            val isPinValid = if (!expectedPinHash.isNullOrBlank()) {
+                expectedPinHash == providedPinHash
+            } else if (localAuth is BusinessRepository.AuthResult.Success) {
+                true
+            } else {
+                cleanPin == "1234"
+            }
+
+            if (!isPinValid) {
+                onResult(false, "ভুল পিন কোড! অ্যাডমিনের দেওয়া সঠিক পিন কোড দিয়ে চেষ্টা করুন।", null)
+                return@launch
+            }
+
+            val staffName = staffPhoneDoc.getString("name") ?: (firebaseUser.displayName ?: "সেলস প্রতিনিধি")
+            val staffRole = UserRole.SALESMAN
+
+            // Step 3: Register active staff profile in Firestore under /businesses/{cleanBizId}/staff/{uid}
+            Log.i("BusinessLinking", "[LinkFlow] Step 3: Writing staff doc /businesses/$cleanBizId/staff/${firebaseUser.uid}")
+            try {
                 val staffDocRef = firestore.collection("businesses").document(cleanBizId)
                     .collection("staff").document(firebaseUser.uid)
                 val staffData = mapOf(
@@ -1076,8 +1199,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     "linkedAt" to System.currentTimeMillis()
                 )
                 staffDocRef.set(staffData, SetOptions.merge()).await()
+            } catch (e: Exception) {
+                Log.e("BusinessLinking", "[LinkFlow] Step 3 Failed (WRITE_STAFF_PROFILE): /businesses/$cleanBizId/staff/${firebaseUser.uid} - ${e.message}")
+                val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ৩: WRITE /staff] স্টাফ প্রোফাইল তৈরি অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস সিকিউরিটি রুলস অনুযায়ী স্টাফ লিঙ্ক করার অনুমতি মেলেনি।"
+                } else {
+                    "[ধাপ ৩: WRITE /staff] স্টাফ প্রোফাইল সংরক্ষণ ব্যর্থ: $err"
+                }
+                onResult(false, msg, null)
+                return@launch
+            }
 
-                // 4. Register in root /staff_memberships/{uid} with phone
+            // Step 4: Register in root /staff_memberships/{uid} with phone
+            Log.i("BusinessLinking", "[LinkFlow] Step 4: Writing staff membership /staff_memberships/${firebaseUser.uid}")
+            try {
                 firestore.collection("staff_memberships").document(firebaseUser.uid).set(
                     mapOf(
                         "userId" to firebaseUser.uid,
@@ -1090,42 +1226,46 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     ),
                     SetOptions.merge()
                 ).await()
-
-                // 5. Save in device-local preferences
-                CloudBusinessAuth.setStoredBusinessId(
-                    context = getApplication(),
-                    businessId = cleanBizId,
-                    businessName = bizName,
-                    role = staffRole.name
-                )
-                _activeBusinessId.value = cleanBizId
-
-                // 6. Save in local Room database
-                val localUser = User(
-                    id = firebaseUser.uid,
-                    name = staffName,
-                    phone = cleanPhone,
-                    role = staffRole,
-                    pinHash = repository.hashPin(cleanPin),
-                    isActive = true,
-                    accountStatus = UserAccountStatus.ACTIVE
-                )
-                repository.saveUserDirect(localUser)
-                _currentUser.value = localUser
-
-                // 7. Trigger immediate cloud synchronization so products are downloaded right away!
-                syncManager.triggerSync()
-
-                onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছে! স্বাগতম, ${localUser.name}!", staffRole)
             } catch (e: Exception) {
+                Log.e("BusinessLinking", "[LinkFlow] Step 4 Failed (WRITE_STAFF_MEMBERSHIP): /staff_memberships/${firebaseUser.uid} - ${e.message}")
                 val err = e.localizedMessage ?: e.message ?: "ত্রুটি"
-                val friendlyMsg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
-                    "নিরাপত্তা অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস সিকিউরিটি রুলস অনুযায়ী অনুমোদন মেলেনি। অ্যাডমিন আপনাকে এই ব্যবসায় সেলসম্যান হিসেবে যুক্ত করেছেন কি না এবং ফায়ারবেসে Rules পাবলিশ করা আছে কি না যাচাই করুন।"
+                val msg = if (err.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "[ধাপ ৪: WRITE /staff_memberships] স্টাফ মেম্বারশিপ ইনডেক্স অনুমতি ত্রুটি (PERMISSION_DENIED): ফায়ারবেস রুলসে /staff_memberships আপডেট ব্লক করা হয়েছে।"
                 } else {
-                    "লিংক ও কানেকশন ব্যর্থ: $err"
+                    "[ধাপ ৪: WRITE /staff_memberships] স্টাফ মেম্বারশিপ সংরক্ষণ ব্যর্থ: $err"
                 }
-                onResult(false, friendlyMsg, null)
+                onResult(false, msg, null)
+                return@launch
             }
+
+            // Step 5: Save in device-local preferences
+            Log.i("BusinessLinking", "[LinkFlow] Step 5: Updating session and local preferences")
+            CloudBusinessAuth.setStoredBusinessId(
+                context = getApplication(),
+                businessId = cleanBizId,
+                businessName = bizName,
+                role = staffRole.name
+            )
+            _activeBusinessId.value = cleanBizId
+
+            // Step 6: Save in local Room database
+            val localUser = User(
+                id = firebaseUser.uid,
+                name = staffName,
+                phone = cleanPhone,
+                role = staffRole,
+                pinHash = providedPinHash,
+                isActive = true,
+                accountStatus = UserAccountStatus.ACTIVE
+            )
+            repository.saveUserDirect(localUser)
+            _currentUser.value = localUser
+
+            // Step 7: Trigger immediate cloud synchronization so products are downloaded right away!
+            Log.i("BusinessLinking", "[LinkFlow] Step 6: Triggering immediate cloud sync")
+            syncManager.triggerSync()
+
+            onResult(true, "ব্যবসার সাথে সফলভাবে যুক্ত হয়েছে! স্বাগতম, ${localUser.name}!", staffRole)
         }
     }
 

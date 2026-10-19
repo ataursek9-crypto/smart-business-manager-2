@@ -196,7 +196,10 @@ service cloud.firestore {
             get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
            ('phone' in incoming() && incoming().phone is string && incoming().phone.size() > 0 &&
             exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)) &&
-            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true)
+            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true) ||
+            (request.auth.token.email != null &&
+             exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_email/$(request.auth.token.email)) &&
+             get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true)
          ))
       );
       allow delete: if isSignedIn() && (

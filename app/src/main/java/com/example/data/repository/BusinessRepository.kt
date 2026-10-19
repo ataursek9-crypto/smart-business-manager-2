@@ -2154,7 +2154,7 @@ class BusinessRepository(
      */
     suspend fun detectTestDueCustomers(): List<DetectedTestDueCustomer> {
         val allActiveCustomers = db.customerDao().getAllCustomers().firstOrNull() ?: emptyList()
-        val dueCustomers = allActiveCustomers.filter { it.currentDue > 0.0 || it.isTestData }
+        val dueCustomers = allActiveCustomers.filter { it.currentDue > 0.0 }
         val result = mutableListOf<DetectedTestDueCustomer>()
 
         for (cust in dueCustomers) {
