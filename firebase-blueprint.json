@@ -17,7 +17,10 @@
         "unit": { "type": "string", "description": "Inventory measurement unit" },
         "isActive": { "type": "boolean", "description": "Whether product is active or soft-deleted" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update server timestamp" },
-        "businessId": { "type": "string", "description": "Scoped business identifier" }
+        "businessId": { "type": "string", "description": "Scoped business identifier" },
+        "imageUri": { "type": "string", "description": "Local/remote product image URI" },
+        "imageSource": { "type": "string", "description": "Image acquisition source" },
+        "imageSourceInfo": { "type": "string", "description": "Image source metadata" }
       },
       "required": ["id", "name", "category", "sellingPrice", "currentStock", "businessId"]
     },
@@ -56,6 +59,7 @@
         "dueAmount": { "type": "number", "description": "Remaining invoice due" },
         "paymentMethod": { "type": "string", "description": "Payment channel used" },
         "isDeleted": { "type": "boolean", "description": "Soft delete flag" },
+        "items": { "type": "array", "description": "Line items sold" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
         "businessId": { "type": "string", "description": "Scoped business identifier" }
       },

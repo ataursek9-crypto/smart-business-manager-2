@@ -104,7 +104,7 @@ data class SaleItem(
     val productName: String,
     val quantity: Double,
     val unitPrice: Double,
-    val purchasePriceAtSale: Double, // বিক্রির সময়ের ক্রয়মূল্য যাতে পরবর্তী দাম পরিবর্তনের কারণে ঐতিহাসিক লাভ অপরিবর্তিত থাকে
+    val purchasePriceAtSale: Double = 0.0, // বিক্রির সময়ের ক্রয়মূল্য যাতে পরবর্তী দাম পরিবর্তনের কারণে ঐতিহাসিক লাভ অপরিবর্তিত থাকে
     val totalPrice: Double
 )
 

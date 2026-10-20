@@ -42,9 +42,9 @@ object GoogleSignInHelper {
             if (resId == 0) {
                 resId = context.resources.getIdentifier("default_web_client_id", "string", "com.example")
             }
-            if (resId != 0) context.getString(resId) else null
+            if (resId != 0) context.getString(resId) else "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
         } catch (_: Exception) {
-            null
+            "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
         }
     }
 
@@ -89,13 +89,23 @@ object GoogleSignInHelper {
                 }
             } catch (e: GetCredentialCancellationException) {
                 Log.w(TAG, "Google Sign-In cancelled: ${e.message}")
-                onError("গুগল সাইন-ইন প্রক্রিয়াটি বাতিল করা হয়েছে।")
+                val isExplicitUserCancel = e.message?.contains("user", ignoreCase = true) == true
+                if (isExplicitUserCancel) {
+                    onError("গুগল সাইন-ইন প্রক্রিয়াটি বাতিল করা হয়েছে।")
+                } else {
+                    onError("গুগল সাইন-ইন স্বয়ংক্রিয়ভাবে বন্ধ হয়েছে। Firebase Console-এ SHA-1 ফিঙ্গারপ্রিন্ট যোগ করা নিশ্চিত করুন।")
+                }
             } catch (e: NoCredentialException) {
                 Log.w(TAG, "No credentials: ${e.message}")
                 onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে ডিভাইসে গুগল একাউন্ট যোগ করুন।")
             } catch (e: GetCredentialException) {
-                Log.e(TAG, "GetCredentialException: ${e.message}", e)
-                onError("গুগল ক্রেডেনশিয়াল ত্রুটি: ${e.localizedMessage ?: "সাইন ইন ব্যর্থ"}")
+                Log.e(TAG, "GetCredentialException: type=${e.type}, message=${e.message}", e)
+                val isDevError = e.message?.contains("10") == true || e.message?.contains("DEVELOPER_ERROR", ignoreCase = true) == true
+                if (isDevError) {
+                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10 / SHA-1 Mismatch)। অনুগ্রহ করে Firebase Console-এ APK-এর SHA-1 যোগ করুন।")
+                } else {
+                    onError("গুগল ক্রেডেনশিয়াল ত্রুটি: ${e.localizedMessage ?: e.message ?: "কনফিগারেশন পরীক্ষা করুন"}")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Authentication failed: ${e.message}", e)
                 onError("সাইন-ইন ব্যর্থ হয়েছে: ${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"}")

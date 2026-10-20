@@ -52,7 +52,16 @@ service cloud.firestore {
              (!('purchasePrice' in data) || data.purchasePrice is number) &&
              (!('unit' in data) || (data.unit is string && data.unit.size() <= 50)) &&
              (!('isActive' in data) || data.isActive is bool) &&
-             (!('isDeleted' in data) || data.isDeleted is bool);
+             (!('isDeleted' in data) || data.isDeleted is bool) &&
+             (!('imageUri' in data) || (data.imageUri is string && data.imageUri.size() <= 1000)) &&
+             (!('imageSource' in data) || (data.imageSource is string && data.imageSource.size() <= 50)) &&
+             (!('imageSourceInfo' in data) || (data.imageSourceInfo is string && data.imageSourceInfo.size() <= 200));
+    }
+
+    function isStaffStockUpdate(existingData, incomingData) {
+      return incomingData.diff(existingData).affectedKeys().hasOnly(['currentStock', 'updatedAt']) &&
+             incomingData.currentStock is number &&
+             (!('purchasePrice' in incomingData) || incomingData.purchasePrice == existingData.purchasePrice);
     }
 
     function isValidCustomer(data) {
@@ -73,7 +82,8 @@ service cloud.firestore {
              data.totalAmount is number && data.totalAmount >= 0 &&
              (!('paidAmount' in data) || (data.paidAmount is number && data.paidAmount >= 0)) &&
              (!('dueAmount' in data) || data.dueAmount is number) &&
-             (!('isDeleted' in data) || data.isDeleted is bool);
+             (!('isDeleted' in data) || data.isDeleted is bool) &&
+             (!('items' in data) || data.items is list);
     }
 
     function isValidReceipt(data) {
@@ -106,7 +116,9 @@ service cloud.firestore {
       // 1. Products
       match /products/{productId} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create, update: if isBusinessOwner(businessId) && isValidProduct(incoming());
+        allow create: if isBusinessOwner(businessId) && isValidProduct(incoming());
+        allow update: if (isBusinessOwner(businessId) && isValidProduct(incoming())) ||
+                         (isBusinessStaff(businessId) && isStaffStockUpdate(existing(), incoming()));
         allow delete: if isBusinessOwner(businessId);
       }
 

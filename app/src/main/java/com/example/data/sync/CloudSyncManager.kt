@@ -8,7 +8,9 @@ import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +63,10 @@ class CloudSyncManager(
                 "unit" to product.unit,
                 "isActive" to product.isActive,
                 "updatedAt" to product.updatedAt,
-                "businessId" to businessId
+                "businessId" to businessId,
+                "imageUri" to (product.imageUri ?: ""),
+                "imageSource" to product.imageSource,
+                "imageSourceInfo" to product.imageSourceInfo
             )
             // Confidential purchase cost price is restricted from salesmen
             if (!isSalesman) {
@@ -86,7 +91,17 @@ class CloudSyncManager(
             )
         }
 
-        fun mapSaleToCloud(sale: Sale, businessId: String): Map<String, Any> {
+        fun mapSaleToCloud(sale: Sale, items: List<SaleItem>, businessId: String): Map<String, Any> {
+            val itemsList = items.map { item ->
+                mapOf(
+                    "productId" to item.productId,
+                    "productName" to item.productName,
+                    "quantity" to item.quantity,
+                    "unitPrice" to item.unitPrice,
+                    "purchasePriceAtSale" to item.purchasePriceAtSale,
+                    "totalPrice" to item.totalPrice
+                )
+            }
             return mapOf(
                 "invoiceNumber" to sale.invoiceNumber,
                 "customerId" to sale.customerId,
@@ -101,9 +116,14 @@ class CloudSyncManager(
                 "dueAmount" to sale.dueAmount,
                 "paymentMethod" to sale.paymentMethod.name,
                 "isDeleted" to sale.isDeleted,
+                "items" to itemsList,
                 "createdAt" to sale.createdAt,
                 "businessId" to businessId
             )
+        }
+
+        fun mapSaleToCloud(sale: Sale, businessId: String): Map<String, Any> {
+            return mapSaleToCloud(sale, emptyList(), businessId)
         }
 
         fun mapReceiptToCloud(receipt: PaymentReceipt, businessId: String): Map<String, Any> {
@@ -192,7 +212,11 @@ class CloudSyncManager(
         val authUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
         if (authUser != null) {
             val email = authUser.email?.trim()?.lowercase() ?: ""
-            if (email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local") {
+            if (email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" || email == "gonee8666@gmail.com") {
+                return false
+            }
+            val storedRole = CloudBusinessAuth.getStoredRole(context)
+            if (storedRole == UserRole.ADMIN.name) {
                 return false
             }
             // If the user is connected to an active business that they do not own, they are a salesman
@@ -231,7 +255,8 @@ class CloudSyncManager(
         }
 
         val email = authUser.email?.trim()?.lowercase() ?: ""
-        val isOwner = email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" ||
+        val isOwner = email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" ||
+                email == "support@smartbiz.local" || email == "gonee8666@gmail.com" ||
                 CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
 
         if (isOwner) {
@@ -258,7 +283,8 @@ class CloudSyncManager(
         } ?: throw IllegalStateException("ক্লাউড সিঙ্ক করার জন্য গুগল একাউন্টে প্রমাণীকরণ আবশ্যক।")
 
         val email = authUser.email?.trim()?.lowercase() ?: ""
-        val isOwner = email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" ||
+        val isOwner = email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" ||
+                email == "support@smartbiz.local" || email == "gonee8666@gmail.com" ||
                 CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
 
         if (isOwner) {
@@ -316,6 +342,9 @@ class CloudSyncManager(
         // Execute real cloud synchronization
         performCloudSync()
 
+        // Maintain live snapshot observation for real-time multi-device sync
+        startProductsRealtimeListener()
+
         val state = SyncState(
             status = SyncStatus.SYNCED,
             statusText = "সিঙ্ক সম্পন্ন",
@@ -325,6 +354,85 @@ class CloudSyncManager(
         )
         _syncState.value = state
         return state
+    }
+
+    private var productsListenerRegistration: ListenerRegistration? = null
+
+    /**
+     * Attaches a real-time snapshot listener to the business's product catalog.
+     * Ensures Admin additions and edits reflect on Salesman devices immediately.
+     */
+    fun startProductsRealtimeListener() {
+        scope.launch {
+            try {
+                val apps = FirebaseApp.getApps(context)
+                if (apps.isEmpty()) return@launch
+                val authUser = FirebaseAuth.getInstance().currentUser ?: return@launch
+                if (authUser.uid.isBlank()) return@launch
+
+                val businessId = try { resolveBusinessId() } catch (_: Exception) {
+                    try { resolveOrFetchBusinessId() } catch (_: Exception) { return@launch }
+                }
+                if (businessId.isBlank()) return@launch
+
+                val firestore = FirebaseFirestore.getInstance()
+
+                productsListenerRegistration?.remove()
+                productsListenerRegistration = firestore.collection("businesses")
+                    .document(businessId)
+                    .collection("products")
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            Log.w(TAG, "Products realtime listener warning: ${error.message}")
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            scope.launch {
+                                val isSalesman = isCurrentActiveSalesman()
+                                for (doc in snapshot.documents) {
+                                    val data = doc.data?.toMutableMap() ?: mutableMapOf()
+                                    if (!data.containsKey("id")) data["id"] = doc.id
+                                    applyRemoteProductMap(data, isSalesman)
+                                }
+                            }
+                        }
+                    }
+                Log.i(TAG, "Realtime products listener started for business: $businessId")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not start products realtime listener: ${e.message}")
+            }
+        }
+    }
+
+    fun stopProductsRealtimeListener() {
+        productsListenerRegistration?.remove()
+        productsListenerRegistration = null
+    }
+
+    /**
+     * Atomically records a sale and deducts product stock in Cloud Firestore.
+     * Prevents race conditions and multi-device double deduction.
+     */
+    suspend fun deductCloudStockForSale(invoiceNumber: String, items: List<SaleItem>, businessId: String) {
+        if (!isCloudBackendConfigured() || businessId.isBlank()) return
+        val firestore = FirebaseFirestore.getInstance()
+        val batch = firestore.batch()
+        val now = System.currentTimeMillis()
+
+        for (item in items) {
+            if (item.productId.isBlank() || item.quantity <= 0) continue
+            val prodDocRef = firestore.collection("businesses").document(businessId).collection("products").document(item.productId)
+            batch.update(prodDocRef, mapOf(
+                "currentStock" to FieldValue.increment(-item.quantity),
+                "updatedAt" to now
+            ))
+        }
+        try {
+            batch.commit().awaitResult()
+            Log.i(TAG, "Atomic cloud stock deduction committed for sale: $invoiceNumber")
+        } catch (e: Exception) {
+            Log.w(TAG, "Atomic cloud stock deduction non-fatal note: ${e.message}")
+        }
     }
 
     /**
@@ -348,7 +456,7 @@ class CloudSyncManager(
                 val state = executeSyncCycle()
                 withContext(Dispatchers.Main) {
                     onComplete(
-                        true,
+                        state.isCloudConfigured,
                         if (state.isCloudConfigured) "ক্লাউড সিঙ্ক সফলভাবে সম্পন্ন হয়েছে!" else state.statusText
                     )
                 }
@@ -537,6 +645,9 @@ class CloudSyncManager(
         val isActive = data["isActive"] as? Boolean ?: true
         val updatedAt = (data["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
         val remotePurchasePrice = (data["purchasePrice"] as? Number)?.toDouble()
+        val imageUri = (data["imageUri"] as? String)?.takeIf { it.isNotBlank() }
+        val imageSource = data["imageSource"] as? String ?: "NONE"
+        val imageSourceInfo = data["imageSourceInfo"] as? String ?: ""
 
         val localProduct = db.productDao().getProductById(id)
         if (localProduct != null) {
@@ -553,6 +664,9 @@ class CloudSyncManager(
                     unit = unit,
                     isActive = isActive,
                     updatedAt = updatedAt,
+                    imageUri = imageUri ?: localProduct.imageUri,
+                    imageSource = if (imageSource != "NONE") imageSource else localProduct.imageSource,
+                    imageSourceInfo = if (imageSourceInfo.isNotBlank()) imageSourceInfo else localProduct.imageSourceInfo,
                     // Purchase price protection: salesman never overwrites or gets exposed to purchase cost
                     purchasePrice = if (isSalesman) (localProduct.purchasePrice.takeIf { it > 0 } ?: 0.0) else (remotePurchasePrice ?: localProduct.purchasePrice)
                 )
@@ -572,6 +686,9 @@ class CloudSyncManager(
                 unit = unit,
                 isActive = isActive,
                 updatedAt = updatedAt,
+                imageUri = imageUri,
+                imageSource = imageSource,
+                imageSourceInfo = imageSourceInfo,
                 isTestData = false
             )
             db.productDao().insertProduct(newProduct)
@@ -585,6 +702,7 @@ class CloudSyncManager(
         if (!isSalesman) {
             val localProducts = db.productDao().getSyncProducts()
             for (product in localProducts) {
+                if (product.isTestData) continue
                 val data = mapProductToCloud(product, businessId, isSalesman = false)
                 collection.document(product.id).set(data, SetOptions.merge()).awaitResult()
             }
@@ -666,10 +784,11 @@ class CloudSyncManager(
     private suspend fun syncSales(firestore: FirebaseFirestore, businessId: String) {
         val collection = firestore.collection("businesses").document(businessId).collection("sales")
 
-        // 1. Upload local sales
+        // 1. Upload local sales with items
         val localSales = db.saleDao().getSyncSales()
         for (sale in localSales) {
-            val data = mapSaleToCloud(sale, businessId)
+            val items = db.saleDao().getSaleItems(sale.invoiceNumber)
+            val data = mapSaleToCloud(sale, items, businessId)
             collection.document(sale.invoiceNumber).set(data, SetOptions.merge()).awaitResult()
         }
 
@@ -717,6 +836,31 @@ class CloudSyncManager(
                     isTestData = false
                 )
                 db.saleDao().insertSale(newSale)
+
+                // Insert associated line items if present
+                val rawItems = doc.get("items") as? List<Map<String, Any?>>
+                if (rawItems != null && rawItems.isNotEmpty()) {
+                    val itemsList = rawItems.mapNotNull { itemMap ->
+                        val pId = itemMap["productId"] as? String ?: return@mapNotNull null
+                        val pName = itemMap["productName"] as? String ?: ""
+                        val qty = (itemMap["quantity"] as? Number)?.toDouble() ?: 0.0
+                        val uPrice = (itemMap["unitPrice"] as? Number)?.toDouble() ?: 0.0
+                        val pPurchase = (itemMap["purchasePriceAtSale"] as? Number)?.toDouble() ?: 0.0
+                        val tPrice = (itemMap["totalPrice"] as? Number)?.toDouble() ?: (qty * uPrice)
+                        SaleItem(
+                            invoiceNumber = invoiceNumber,
+                            productId = pId,
+                            productName = pName,
+                            quantity = qty,
+                            unitPrice = uPrice,
+                            purchasePriceAtSale = pPurchase,
+                            totalPrice = tPrice
+                        )
+                    }
+                    if (itemsList.isNotEmpty()) {
+                        db.saleDao().insertSaleItems(itemsList)
+                    }
+                }
             }
         }
     }
