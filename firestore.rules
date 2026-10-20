@@ -98,7 +98,23 @@ service cloud.firestore {
              data.amount is number && data.amount > 0 &&
              data.category is string && data.category.size() <= 50 &&
              (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'REJECTED'])) &&
+             (!('reviewedAt' in data) || data.reviewedAt is number) &&
              (!('isDeleted' in data) || data.isDeleted is bool);
+    }
+
+    function isValidProductSubmission(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.category is string && data.category.size() <= 100 &&
+             data.purchasePrice is number && data.purchasePrice >= 0 &&
+             data.sellingPrice is number && data.sellingPrice >= 0 &&
+             data.initialStock is number && data.initialStock >= 0 &&
+             (!('productCode' in data) || (data.productCode is string && data.productCode.size() <= 100)) &&
+             (!('unit' in data) || (data.unit is string && data.unit.size() <= 50)) &&
+             (!('salesmanId' in data) || (data.salesmanId is string && data.salesmanId.size() <= 128)) &&
+             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'NEEDS_CORRECTION'])) &&
+             (!('adminCorrectionNote' in data) || (data.adminCorrectionNote is string && data.adminCorrectionNote.size() <= 500)) &&
+             (!('imageUri' in data) || (data.imageUri is string && data.imageUri.size() <= 1000));
     }
 
     function isValidTombstone(data) {
@@ -145,15 +161,23 @@ service cloud.firestore {
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 5. Expenses - Staff can submit & sync, only Owner can approve or delete
+      // 5. Expenses - Staff can submit & sync (pending), only Owner can approve or delete
       match /expenses/{expenseId} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create: if isBusinessStaff(businessId) && isValidExpense(incoming());
-        allow update: if (isBusinessOwner(businessId) || isBusinessStaff(businessId)) && isValidExpense(incoming());
+        allow create: if isBusinessStaff(businessId) && isValidExpense(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
+        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && incoming().status == existing().status)) && isValidExpense(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 6. Tombstones - Prevents cross-device resurrection of deleted records
+      // 6. Product Submissions - Staff can submit & resubmit, only Owner can approve or return for correction
+      match /product_submissions/{submissionId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidProductSubmission(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
+        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && (existing().status == 'NEEDS_CORRECTION' || incoming().status == 'PENDING'))) && isValidProductSubmission(incoming());
+        allow delete: if isBusinessOwner(businessId);
+      }
+
+      // 7. Tombstones - Prevents cross-device resurrection of deleted records
       match /tombstones/{tombstoneId} {
         allow get, list: if isBusinessStaff(businessId);
         allow create, update: if isBusinessOwner(businessId) && isValidTombstone(incoming());

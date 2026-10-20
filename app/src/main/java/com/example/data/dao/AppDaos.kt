@@ -340,6 +340,9 @@ interface ProductSubmissionDao {
 
     @Query("SELECT COUNT(*) FROM product_submissions WHERE status = 'PENDING'")
     fun getPendingCount(): Flow<Int>
+
+    @Query("SELECT * FROM product_submissions")
+    suspend fun getSyncSubmissions(): List<ProductSubmission>
 }
 
 @Dao

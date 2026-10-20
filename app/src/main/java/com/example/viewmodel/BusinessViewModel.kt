@@ -1422,6 +1422,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             try {
                 repository.submitExpense(expense, user)
                 _toastMessage.emit("খরচের আবেদন সফলভাবে দাখিল করা হয়েছে")
+                syncManager.triggerSync()
                 onComplete()
             } catch (e: Exception) {
                 _toastMessage.emit(e.message ?: "ত্রুটি হয়েছে")
@@ -1438,6 +1439,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 user
             )
             _toastMessage.emit("খরচের স্ট্যাটাস আপডেট হয়েছে")
+            syncManager.triggerSync()
         }
     }
 
@@ -1688,6 +1690,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 repository.submitProduct(submission, user)
                 _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে জমা দেওয়া হয়েছে")
+                syncManager.triggerSync()
                 onSuccess()
 
                 // Auto mode background image acquisition if no image was provided
@@ -1706,6 +1709,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                                 imageSource = autoResult.source,
                                 imageSourceInfo = autoResult.info
                             )
+                            syncManager.triggerSync()
                         }
                     }
                 }
@@ -1758,6 +1762,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 repository.resubmitProductForCorrection(submissionId, dummyUpdated, user)
                 _toastMessage.emit("সংশোধিত প্রোডাক্ট সফলভাবে পুনরায় জমা দেওয়া হয়েছে")
+                syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
                 onError(e.message ?: "প্রোডাক্ট পুনরায় জমা দিতে সমস্যা হয়েছে")
@@ -1808,6 +1813,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             try {
                 repository.returnProductForCorrection(submissionId, reason, admin)
                 _toastMessage.emit("প্রোডাক্টটি সংশোধনের জন্য ফেরত পাঠানো হয়েছে")
+                syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
                 onError(e.message ?: "প্রোডাক্ট ফেরত পাঠাতে ব্যর্থ হয়েছে")

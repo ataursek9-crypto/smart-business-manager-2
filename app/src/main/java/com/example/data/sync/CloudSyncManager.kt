@@ -147,7 +147,7 @@ class CloudSyncManager(
         }
 
         fun mapExpenseToCloud(expense: Expense, businessId: String): Map<String, Any> {
-            return mapOf(
+            val map = mutableMapOf<String, Any>(
                 "id" to expense.id,
                 "salesmanId" to expense.salesmanId,
                 "salesmanName" to expense.salesmanName,
@@ -161,6 +161,38 @@ class CloudSyncManager(
                 "createdAt" to expense.createdAt,
                 "businessId" to businessId
             )
+            expense.reviewedAt?.let { map["reviewedAt"] = it }
+            return map
+        }
+
+        fun mapProductSubmissionToCloud(sub: ProductSubmission, businessId: String): Map<String, Any> {
+            val map = mutableMapOf<String, Any>(
+                "id" to sub.id,
+                "name" to sub.name,
+                "productCode" to sub.productCode,
+                "category" to sub.category,
+                "purchasePrice" to sub.purchasePrice,
+                "sellingPrice" to sub.sellingPrice,
+                "initialStock" to sub.initialStock,
+                "unit" to sub.unit,
+                "description" to sub.description,
+                "salesmanId" to sub.salesmanId,
+                "salesmanName" to sub.salesmanName,
+                "salesmanPhone" to sub.salesmanPhone,
+                "status" to sub.status.name,
+                "adminCorrectionNote" to sub.adminCorrectionNote,
+                "imageSource" to sub.imageSource,
+                "imageSourceInfo" to sub.imageSourceInfo,
+                "createdAt" to sub.createdAt,
+                "updatedAt" to sub.updatedAt,
+                "businessId" to businessId
+            )
+            sub.approvedProductId?.let { map["approvedProductId"] = it }
+            sub.reviewedByAdminId?.let { map["reviewedByAdminId"] = it }
+            sub.reviewedByAdminName?.let { map["reviewedByAdminName"] = it }
+            sub.reviewedAt?.let { map["reviewedAt"] = it }
+            sub.imageUri?.let { map["imageUri"] = it }
+            return map
         }
 
         fun mapTombstoneToCloud(tombstone: Tombstone, businessId: String): Map<String, Any> {
@@ -357,10 +389,12 @@ class CloudSyncManager(
     }
 
     private var productsListenerRegistration: ListenerRegistration? = null
+    private var submissionsListenerRegistration: ListenerRegistration? = null
+    private var expensesListenerRegistration: ListenerRegistration? = null
 
     /**
-     * Attaches a real-time snapshot listener to the business's product catalog.
-     * Ensures Admin additions and edits reflect on Salesman devices immediately.
+     * Attaches real-time snapshot listeners to products, product_submissions, and expenses.
+     * Ensures Admin reviews, salesman submissions, and expenses reflect on all authorized devices immediately.
      */
     fun startProductsRealtimeListener() {
         scope.launch {
@@ -377,6 +411,7 @@ class CloudSyncManager(
 
                 val firestore = FirebaseFirestore.getInstance()
 
+                // 1. Products Listener
                 productsListenerRegistration?.remove()
                 productsListenerRegistration = firestore.collection("businesses")
                     .document(businessId)
@@ -397,9 +432,48 @@ class CloudSyncManager(
                             }
                         }
                     }
-                Log.i(TAG, "Realtime products listener started for business: $businessId")
+
+                // 2. Product Submissions Listener (for Admin review and Salesman status feedback)
+                submissionsListenerRegistration?.remove()
+                submissionsListenerRegistration = firestore.collection("businesses")
+                    .document(businessId)
+                    .collection("product_submissions")
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            Log.w(TAG, "Submissions realtime listener warning: ${error.message}")
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            scope.launch {
+                                for (doc in snapshot.documents) {
+                                    applyRemoteSubmissionDoc(doc)
+                                }
+                            }
+                        }
+                    }
+
+                // 3. Expenses Listener (for Admin approval and Salesman status feedback)
+                expensesListenerRegistration?.remove()
+                expensesListenerRegistration = firestore.collection("businesses")
+                    .document(businessId)
+                    .collection("expenses")
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            Log.w(TAG, "Expenses realtime listener warning: ${error.message}")
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            scope.launch {
+                                for (doc in snapshot.documents) {
+                                    applyRemoteExpenseDoc(doc)
+                                }
+                            }
+                        }
+                    }
+
+                Log.i(TAG, "Realtime listeners started for business: $businessId")
             } catch (e: Exception) {
-                Log.w(TAG, "Could not start products realtime listener: ${e.message}")
+                Log.w(TAG, "Could not start realtime listeners: ${e.message}")
             }
         }
     }
@@ -407,6 +481,10 @@ class CloudSyncManager(
     fun stopProductsRealtimeListener() {
         productsListenerRegistration?.remove()
         productsListenerRegistration = null
+        submissionsListenerRegistration?.remove()
+        submissionsListenerRegistration = null
+        expensesListenerRegistration?.remove()
+        expensesListenerRegistration = null
     }
 
     /**
@@ -517,6 +595,9 @@ class CloudSyncManager(
 
         // 6. Synchronize Expenses
         syncExpenses(firestore, businessId)
+
+        // 7. Synchronize Product Submissions
+        syncProductSubmissions(firestore, businessId)
     }
 
     private suspend fun syncBusinessAndStaff(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
@@ -937,43 +1018,163 @@ class CloudSyncManager(
         // 2. Download remote expenses
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
-            val id = doc.getString("id") ?: doc.id
-            val tombstone = db.recycleBinDao().getItemByOriginalId("expenses", id)
-            if (tombstone != null && !tombstone.isRestored) {
-                continue
-            }
+            applyRemoteExpenseDoc(doc)
+        }
+    }
 
-            val existing = db.expenseDao().getExpenseById(id)
-            if (existing == null) {
-                val salesmanId = doc.getString("salesmanId") ?: ""
-                val salesmanName = doc.getString("salesmanName") ?: ""
-                val categoryStr = doc.getString("category") ?: ExpenseCategory.OTHER.name
-                val category = try { ExpenseCategory.valueOf(categoryStr) } catch (e: Exception) { ExpenseCategory.OTHER }
-                val sourceStr = doc.getString("source") ?: ExpenseSource.COMPANY_CASH.name
-                val source = try { ExpenseSource.valueOf(sourceStr) } catch (e: Exception) { ExpenseSource.COMPANY_CASH }
-                val amount = doc.getDouble("amount") ?: 0.0
-                val description = doc.getString("description") ?: ""
-                val statusStr = doc.getString("status") ?: ExpenseStatus.APPROVED.name
-                val status = try { ExpenseStatus.valueOf(statusStr) } catch (e: Exception) { ExpenseStatus.APPROVED }
-                val adminNote = doc.getString("adminNote") ?: ""
-                val isDeleted = doc.getBoolean("isDeleted") ?: false
-                val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+    suspend fun applyRemoteExpenseDoc(doc: DocumentSnapshot) {
+        val id = doc.getString("id") ?: doc.id
+        val tombstone = db.recycleBinDao().getItemByOriginalId("expenses", id)
+        if (tombstone != null && !tombstone.isRestored) {
+            return
+        }
 
-                val newExpense = Expense(
-                    id = id,
-                    salesmanId = salesmanId,
-                    salesmanName = salesmanName,
-                    category = category,
-                    source = source,
-                    amount = amount,
-                    description = description,
+        val salesmanId = doc.getString("salesmanId") ?: ""
+        val salesmanName = doc.getString("salesmanName") ?: ""
+        val categoryStr = doc.getString("category") ?: ExpenseCategory.OTHER.name
+        val category = try { ExpenseCategory.valueOf(categoryStr) } catch (e: Exception) { ExpenseCategory.OTHER }
+        val sourceStr = doc.getString("source") ?: ExpenseSource.COMPANY_CASH.name
+        val source = try { ExpenseSource.valueOf(sourceStr) } catch (e: Exception) { ExpenseSource.COMPANY_CASH }
+        val amount = doc.getDouble("amount") ?: 0.0
+        val description = doc.getString("description") ?: ""
+        val statusStr = doc.getString("status") ?: ExpenseStatus.APPROVED.name
+        val status = try { ExpenseStatus.valueOf(statusStr) } catch (e: Exception) { ExpenseStatus.APPROVED }
+        val adminNote = doc.getString("adminNote") ?: ""
+        val isDeleted = doc.getBoolean("isDeleted") ?: false
+        val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+        val reviewedAt = doc.getLong("reviewedAt")
+
+        val existing = db.expenseDao().getExpenseById(id)
+        if (existing == null) {
+            val newExpense = Expense(
+                id = id,
+                salesmanId = salesmanId,
+                salesmanName = salesmanName,
+                category = category,
+                source = source,
+                amount = amount,
+                description = description,
+                status = status,
+                adminNote = adminNote,
+                isDeleted = isDeleted,
+                createdAt = createdAt,
+                reviewedAt = reviewedAt,
+                isTestData = false
+            )
+            db.expenseDao().insertExpense(newExpense)
+        } else {
+            // Update local expense if status, note, review timestamp, or deletion state changed remotely
+            if (existing.status != status || existing.adminNote != adminNote || existing.reviewedAt != reviewedAt || existing.isDeleted != isDeleted) {
+                val updatedExpense = existing.copy(
                     status = status,
                     adminNote = adminNote,
-                    isDeleted = isDeleted,
-                    createdAt = createdAt,
-                    isTestData = false
+                    reviewedAt = reviewedAt ?: existing.reviewedAt,
+                    isDeleted = isDeleted
                 )
-                db.expenseDao().insertExpense(newExpense)
+                db.expenseDao().updateExpense(updatedExpense)
+            }
+        }
+    }
+
+    private suspend fun syncProductSubmissions(firestore: FirebaseFirestore, businessId: String) {
+        val collection = firestore.collection("businesses").document(businessId).collection("product_submissions")
+
+        // 1. Upload local product submissions
+        val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+        for (sub in localSubmissions) {
+            val data = mapProductSubmissionToCloud(sub, businessId)
+            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+        }
+
+        // 2. Download remote product submissions
+        val snapshot = collection.get().awaitResult()
+        for (doc in snapshot.documents) {
+            applyRemoteSubmissionDoc(doc)
+        }
+    }
+
+    suspend fun applyRemoteSubmissionDoc(doc: DocumentSnapshot) {
+        val id = doc.getString("id") ?: doc.id
+        val name = doc.getString("name") ?: ""
+        if (name.isBlank()) return
+        val productCode = doc.getString("productCode") ?: ""
+        val category = doc.getString("category") ?: "সাধারণ"
+        val purchasePrice = doc.getDouble("purchasePrice") ?: 0.0
+        val sellingPrice = doc.getDouble("sellingPrice") ?: 0.0
+        val initialStock = doc.getDouble("initialStock") ?: 0.0
+        val unit = doc.getString("unit") ?: "পিস"
+        val description = doc.getString("description") ?: ""
+        val salesmanId = doc.getString("salesmanId") ?: ""
+        val salesmanName = doc.getString("salesmanName") ?: ""
+        val salesmanPhone = doc.getString("salesmanPhone") ?: ""
+        val statusStr = doc.getString("status") ?: ProductSubmissionStatus.PENDING.name
+        val status = try { ProductSubmissionStatus.valueOf(statusStr) } catch (e: Exception) { ProductSubmissionStatus.PENDING }
+        val adminCorrectionNote = doc.getString("adminCorrectionNote") ?: ""
+        val approvedProductId = doc.getString("approvedProductId")
+        val reviewedByAdminId = doc.getString("reviewedByAdminId")
+        val reviewedByAdminName = doc.getString("reviewedByAdminName")
+        val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+        val updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
+        val reviewedAt = doc.getLong("reviewedAt")
+        val imageUri = doc.getString("imageUri")
+        val imageSource = doc.getString("imageSource") ?: "NONE"
+        val imageSourceInfo = doc.getString("imageSourceInfo") ?: ""
+
+        val existing = db.productSubmissionDao().getSubmissionById(id)
+        if (existing == null) {
+            val newSub = ProductSubmission(
+                id = id,
+                name = name,
+                productCode = productCode,
+                category = category,
+                purchasePrice = purchasePrice,
+                sellingPrice = sellingPrice,
+                initialStock = initialStock,
+                unit = unit,
+                description = description,
+                salesmanId = salesmanId,
+                salesmanName = salesmanName,
+                salesmanPhone = salesmanPhone,
+                status = status,
+                adminCorrectionNote = adminCorrectionNote,
+                approvedProductId = approvedProductId,
+                reviewedByAdminId = reviewedByAdminId,
+                reviewedByAdminName = reviewedByAdminName,
+                createdAt = createdAt,
+                updatedAt = updatedAt,
+                reviewedAt = reviewedAt,
+                imageUri = imageUri,
+                imageSource = imageSource,
+                imageSourceInfo = imageSourceInfo
+            )
+            db.productSubmissionDao().insertSubmission(newSub)
+        } else {
+            // Update if status, admin notes, review data, or updatedAt changed remotely
+            if (existing.status != status ||
+                existing.adminCorrectionNote != adminCorrectionNote ||
+                existing.approvedProductId != approvedProductId ||
+                existing.updatedAt < updatedAt) {
+                val updatedSub = existing.copy(
+                    name = name,
+                    productCode = productCode,
+                    category = category,
+                    purchasePrice = purchasePrice,
+                    sellingPrice = sellingPrice,
+                    initialStock = initialStock,
+                    unit = unit,
+                    description = description,
+                    status = status,
+                    adminCorrectionNote = adminCorrectionNote,
+                    approvedProductId = approvedProductId,
+                    reviewedByAdminId = reviewedByAdminId,
+                    reviewedByAdminName = reviewedByAdminName,
+                    reviewedAt = reviewedAt ?: existing.reviewedAt,
+                    updatedAt = maxOf(existing.updatedAt, updatedAt),
+                    imageUri = imageUri ?: existing.imageUri,
+                    imageSource = if (imageSource != "NONE") imageSource else existing.imageSource,
+                    imageSourceInfo = if (imageSourceInfo.isNotBlank()) imageSourceInfo else existing.imageSourceInfo
+                )
+                db.productSubmissionDao().updateSubmission(updatedSub)
             }
         }
     }
