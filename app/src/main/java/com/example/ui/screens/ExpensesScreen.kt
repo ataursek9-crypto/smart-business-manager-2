@@ -38,8 +38,13 @@ fun ExpensesScreen(
     onBack: () -> Unit
 ) {
     BackHandler { onBack() }
+    val context = LocalContext.current
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val isAdmin = currentUser?.role == UserRole.ADMIN
+
+    LaunchedEffect(Unit) {
+        viewModel.triggerSync()
+    }
 
     val expenses = if (isAdmin) {
         viewModel.allExpenses.collectAsStateWithLifecycle().value
@@ -59,6 +64,18 @@ fun ExpensesScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "ফিরে যান")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            viewModel.triggerSync { _, msg ->
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.testTag("btn_sync_expenses")
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = "সিঙ্ক করুন", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

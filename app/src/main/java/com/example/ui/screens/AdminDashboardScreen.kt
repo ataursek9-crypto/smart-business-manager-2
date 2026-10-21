@@ -79,6 +79,7 @@ fun AdminDashboardScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshActiveBusinessId()
+        viewModel.triggerSync()
     }
 
     var showChangeCredentialsDialog by remember { mutableStateOf(false) }

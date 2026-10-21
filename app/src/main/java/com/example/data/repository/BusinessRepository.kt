@@ -1060,7 +1060,11 @@ class BusinessRepository(
         if (finalData.initialStock < 0) throw IllegalArgumentException("প্রাথমিক স্টক ঋণাত্মক হতে পারে না!")
 
         return db.withTransaction {
-            val newProductId = "prod_${System.currentTimeMillis()}"
+            val newProductId = if (!existing.approvedProductId.isNullOrBlank()) {
+                existing.approvedProductId!!
+            } else {
+                "prod_${System.currentTimeMillis()}"
+            }
             val newSku = if (finalData.productCode.isNotBlank()) {
                 finalData.productCode.trim()
             } else if (existing.productCode.isNotBlank()) {
@@ -1086,8 +1090,13 @@ class BusinessRepository(
                 imageSourceInfo = if (!finalData.imageUri.isNullOrBlank()) finalData.imageSourceInfo else existing.imageSourceInfo
             )
 
-            // Insert approved product into live table
-            db.productDao().insertProduct(approvedProduct)
+            // Insert or update approved product into live table (prevents duplicate items)
+            val existingProduct = db.productDao().getProductById(newProductId)
+            if (existingProduct != null) {
+                db.productDao().updateProduct(approvedProduct)
+            } else {
+                db.productDao().insertProduct(approvedProduct)
+            }
 
             // Insert initial stock log
             db.stockLogDao().insertStockLog(

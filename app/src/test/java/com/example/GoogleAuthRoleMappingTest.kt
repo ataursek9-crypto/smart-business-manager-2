@@ -47,6 +47,8 @@ class GoogleAuthRoleMappingTest {
 
     @After
     fun tearDown() {
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        viewModel.syncManager.cancelActiveSync()
         Dispatchers.resetMain()
         db.close()
     }
@@ -67,6 +69,7 @@ class GoogleAuthRoleMappingTest {
             callbackMsg = msg
             callbackRole = role
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertFalse("Unknown Google user must not be granted access", callbackSuccess == true)
@@ -89,6 +92,7 @@ class GoogleAuthRoleMappingTest {
             callbackSuccess = success
             callbackRole = role
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue("Primary business owner must succeed", callbackSuccess == true)
@@ -123,6 +127,7 @@ class GoogleAuthRoleMappingTest {
             linkSuccess = success
             linkRole = role
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue("Linking with correct PIN must succeed", linkSuccess == true)
@@ -155,6 +160,7 @@ class GoogleAuthRoleMappingTest {
         ) { success, _, _ ->
             linkSuccess = success
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertFalse("Linking with incorrect PIN must fail", linkSuccess == true)

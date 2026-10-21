@@ -66,6 +66,10 @@ fun AdminProductApprovalScreen(
     var submissionToReview by remember { mutableStateOf<ProductSubmission?>(null) }
     var submissionToReturn by remember { mutableStateOf<ProductSubmission?>(null) }
 
+    LaunchedEffect(Unit) {
+        viewModel.triggerSync()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -73,6 +77,18 @@ fun AdminProductApprovalScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "ফিরে যান")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            viewModel.triggerSync { _, msg ->
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.testTag("btn_sync_product_approval")
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = "সিঙ্ক করুন", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

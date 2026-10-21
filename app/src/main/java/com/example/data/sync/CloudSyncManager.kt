@@ -17,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -208,7 +210,11 @@ class CloudSyncManager(
         }
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    fun cancelActiveSync() {
+        scope.coroutineContext.cancelChildren()
+    }
     private val _syncState = MutableStateFlow(
         SyncState(
             status = if (isCloudBackendConfigured()) SyncStatus.SYNCED else SyncStatus.LOCAL_SAVED,
@@ -518,9 +524,9 @@ class CloudSyncManager(
      * If cloud backend is configured, it performs real bidirectional Firestore sync.
      * If cloud backend is pending setup, it safely records local counts without reporting false sync success.
      */
-    fun triggerSync(onComplete: (Boolean, String) -> Unit = { _, _ -> }) {
+    fun triggerSync(onComplete: ((Boolean, String) -> Unit)? = null) {
         if (!isSyncing.compareAndSet(false, true)) {
-            onComplete(false, "ইতিমধ্যেই সিঙ্ক প্রক্রিয়া চলমান রয়েছে...")
+            onComplete?.invoke(false, "ইতিমধ্যেই সিঙ্ক প্রক্রিয়া চলমান রয়েছে...")
             return
         }
 
@@ -532,11 +538,13 @@ class CloudSyncManager(
                 )
 
                 val state = executeSyncCycle()
-                withContext(Dispatchers.Main) {
-                    onComplete(
-                        state.isCloudConfigured,
-                        if (state.isCloudConfigured) "ক্লাউড সিঙ্ক সফলভাবে সম্পন্ন হয়েছে!" else state.statusText
-                    )
+                if (onComplete != null) {
+                    withContext(Dispatchers.Main) {
+                        onComplete(
+                            state.isCloudConfigured,
+                            if (state.isCloudConfigured) "ক্লাউড সিঙ্ক সফলভাবে সম্পন্ন হয়েছে!" else state.statusText
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed: ${e.message}", e)
@@ -545,8 +553,10 @@ class CloudSyncManager(
                     statusText = "সিঙ্ক ব্যর্থ: ${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"}",
                     errorMessage = e.message
                 )
-                withContext(Dispatchers.Main) {
-                    onComplete(false, e.localizedMessage ?: "সিঙ্ক ব্যর্থ")
+                if (onComplete != null) {
+                    withContext(Dispatchers.Main) {
+                        onComplete(false, e.localizedMessage ?: "সিঙ্ক ব্যর্থ")
+                    }
                 }
             } finally {
                 isSyncing.set(false)
@@ -593,11 +603,11 @@ class CloudSyncManager(
         // 5. Synchronize Payment Receipts (idempotent, no duplicates)
         syncPayments(firestore, businessId)
 
-        // 6. Synchronize Expenses
-        syncExpenses(firestore, businessId)
+        // 6. Synchronize Expenses (download first, role-protected upload)
+        syncExpenses(firestore, businessId, isSalesman)
 
-        // 7. Synchronize Product Submissions
-        syncProductSubmissions(firestore, businessId)
+        // 7. Synchronize Product Submissions (download first, role-protected upload)
+        syncProductSubmissions(firestore, businessId, isSalesman)
     }
 
     private suspend fun syncBusinessAndStaff(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
@@ -1005,20 +1015,25 @@ class CloudSyncManager(
         }
     }
 
-    private suspend fun syncExpenses(firestore: FirebaseFirestore, businessId: String) {
+    private suspend fun syncExpenses(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("expenses")
 
-        // 1. Upload local expenses
-        val localExpenses = db.expenseDao().getSyncExpenses()
-        for (expense in localExpenses) {
-            val data = mapExpenseToCloud(expense, businessId)
-            collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
-        }
-
-        // 2. Download remote expenses
+        // 1. Download remote expenses first to retrieve Admin reviews, approvals, and rejections
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
             applyRemoteExpenseDoc(doc)
+        }
+
+        // 2. Upload local expenses
+        // If salesman: only upload PENDING active expenses submitted by this salesman (never overwrite approved/rejected records)
+        // If admin: upload all local real expenses (including approvals, rejections, and review notes)
+        val localExpenses = db.expenseDao().getSyncExpenses()
+        for (expense in localExpenses) {
+            if (isSalesman && (expense.status != ExpenseStatus.PENDING || expense.isDeleted)) {
+                continue
+            }
+            val data = mapExpenseToCloud(expense, businessId)
+            collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
         }
     }
 
@@ -1035,7 +1050,7 @@ class CloudSyncManager(
         val category = try { ExpenseCategory.valueOf(categoryStr) } catch (e: Exception) { ExpenseCategory.OTHER }
         val sourceStr = doc.getString("source") ?: ExpenseSource.COMPANY_CASH.name
         val source = try { ExpenseSource.valueOf(sourceStr) } catch (e: Exception) { ExpenseSource.COMPANY_CASH }
-        val amount = doc.getDouble("amount") ?: 0.0
+        val amount = (doc.get("amount") as? Number)?.toDouble() ?: doc.getDouble("amount") ?: 0.0
         val description = doc.getString("description") ?: ""
         val statusStr = doc.getString("status") ?: ExpenseStatus.APPROVED.name
         val status = try { ExpenseStatus.valueOf(statusStr) } catch (e: Exception) { ExpenseStatus.APPROVED }
@@ -1063,9 +1078,19 @@ class CloudSyncManager(
             )
             db.expenseDao().insertExpense(newExpense)
         } else {
-            // Update local expense if status, note, review timestamp, or deletion state changed remotely
-            if (existing.status != status || existing.adminNote != adminNote || existing.reviewedAt != reviewedAt || existing.isDeleted != isDeleted) {
+            // Update local expense if status, note, review timestamp, amount, description or deletion state changed remotely
+            if (existing.status != status ||
+                existing.adminNote != adminNote ||
+                existing.reviewedAt != reviewedAt ||
+                existing.isDeleted != isDeleted ||
+                existing.amount != amount ||
+                existing.description != description) {
                 val updatedExpense = existing.copy(
+                    salesmanName = if (salesmanName.isNotBlank()) salesmanName else existing.salesmanName,
+                    category = category,
+                    source = source,
+                    amount = amount,
+                    description = description,
                     status = status,
                     adminNote = adminNote,
                     reviewedAt = reviewedAt ?: existing.reviewedAt,
@@ -1076,20 +1101,25 @@ class CloudSyncManager(
         }
     }
 
-    private suspend fun syncProductSubmissions(firestore: FirebaseFirestore, businessId: String) {
+    private suspend fun syncProductSubmissions(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("product_submissions")
 
-        // 1. Upload local product submissions
-        val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-        for (sub in localSubmissions) {
-            val data = mapProductSubmissionToCloud(sub, businessId)
-            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
-        }
-
-        // 2. Download remote product submissions
+        // 1. Download remote product submissions first to retrieve Admin review and approvals
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
             applyRemoteSubmissionDoc(doc)
+        }
+
+        // 2. Upload local product submissions
+        // If salesman: only upload PENDING or NEEDS_CORRECTION resubmissions (never overwrite APPROVED submissions)
+        // If admin: upload all local submissions (including approvals, notes, and revisions)
+        val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+        for (sub in localSubmissions) {
+            if (isSalesman && sub.status == ProductSubmissionStatus.APPROVED) {
+                continue
+            }
+            val data = mapProductSubmissionToCloud(sub, businessId)
+            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
         }
     }
 
@@ -1099,9 +1129,9 @@ class CloudSyncManager(
         if (name.isBlank()) return
         val productCode = doc.getString("productCode") ?: ""
         val category = doc.getString("category") ?: "সাধারণ"
-        val purchasePrice = doc.getDouble("purchasePrice") ?: 0.0
-        val sellingPrice = doc.getDouble("sellingPrice") ?: 0.0
-        val initialStock = doc.getDouble("initialStock") ?: 0.0
+        val purchasePrice = (doc.get("purchasePrice") as? Number)?.toDouble() ?: doc.getDouble("purchasePrice") ?: 0.0
+        val sellingPrice = (doc.get("sellingPrice") as? Number)?.toDouble() ?: doc.getDouble("sellingPrice") ?: 0.0
+        val initialStock = (doc.get("initialStock") as? Number)?.toDouble() ?: doc.getDouble("initialStock") ?: 0.0
         val unit = doc.getString("unit") ?: "পিস"
         val description = doc.getString("description") ?: ""
         val salesmanId = doc.getString("salesmanId") ?: ""
@@ -1153,7 +1183,8 @@ class CloudSyncManager(
             if (existing.status != status ||
                 existing.adminCorrectionNote != adminCorrectionNote ||
                 existing.approvedProductId != approvedProductId ||
-                existing.updatedAt < updatedAt) {
+                existing.reviewedAt != reviewedAt ||
+                existing.updatedAt <= updatedAt) {
                 val updatedSub = existing.copy(
                     name = name,
                     productCode = productCode,

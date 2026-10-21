@@ -90,7 +90,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         _activeBusinessId.value = getActiveBusinessId()
     }
 
-    fun triggerSync(onResult: (Boolean, String) -> Unit = { _, _ -> }) {
+    fun triggerSync(onResult: ((Boolean, String) -> Unit)? = null) {
         syncManager.triggerSync(onResult)
     }
 
@@ -2526,5 +2526,6 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     override fun onCleared() {
         super.onCleared()
         voiceHelper.shutdown()
+        syncManager.cancelActiveSync()
     }
 }
