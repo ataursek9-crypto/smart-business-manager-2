@@ -89,12 +89,7 @@ object GoogleSignInHelper {
                 }
             } catch (e: GetCredentialCancellationException) {
                 Log.w(TAG, "Google Sign-In cancelled: ${e.message}")
-                val isExplicitUserCancel = e.message?.contains("user", ignoreCase = true) == true
-                if (isExplicitUserCancel) {
-                    onError("গুগল সাইন-ইন প্রক্রিয়াটি বাতিল করা হয়েছে।")
-                } else {
-                    onError("গুগল সাইন-ইন স্বয়ংক্রিয়ভাবে বন্ধ হয়েছে। Firebase Console-এ SHA-1 ফিঙ্গারপ্রিন্ট যোগ করা নিশ্চিত করুন।")
-                }
+                onError("গুগল সাইন-ইন সম্পন্ন হয়নি বা বাতিল হয়েছে। (আপনার Firebase Console-এ SHA-1: CC:86:91:7E:EB:9C:38:75:77:C4:90:E9:F3:19:AB:3D:B0:45:8E:67 যোগ করা নিশ্চিত করুন)")
             } catch (e: NoCredentialException) {
                 Log.w(TAG, "No credentials: ${e.message}")
                 onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে ডিভাইসে গুগল একাউন্ট যোগ করুন।")

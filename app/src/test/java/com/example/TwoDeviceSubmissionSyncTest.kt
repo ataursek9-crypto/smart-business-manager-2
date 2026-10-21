@@ -64,7 +64,7 @@ class TwoDeviceSubmissionSyncTest {
         CloudBusinessAuth.clear(app)
     }
 
-    // 1. Product submission: Salesman submits on phone -> Admin receives PENDING submission
+    // 1. Product submission: Salesman submits on phone -> Admin receives PENDING submission via applyRemoteSubmissionMap
     @Test
     fun testSalesmanProductSubmissionUploadAndAdminReceive() = runTest(testDispatcher) {
         val submission = ProductSubmission(
@@ -103,27 +103,11 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals(businessId, cloudMap["businessId"])
         assertEquals(salesmanId, cloudMap["salesmanId"])
 
-        // Simulate Admin device downloading from cloud and applying locally
+        // Admin device should initially not have this submission
         assertNull("Admin device should initially not have this submission", adminDb.productSubmissionDao().getSubmissionById("sub_prod_101"))
 
-        val remoteSub = ProductSubmission(
-            id = cloudMap["id"] as String,
-            name = cloudMap["name"] as String,
-            productCode = cloudMap["productCode"] as String,
-            category = cloudMap["category"] as String,
-            purchasePrice = cloudMap["purchasePrice"] as Double,
-            sellingPrice = cloudMap["sellingPrice"] as Double,
-            initialStock = cloudMap["initialStock"] as Double,
-            unit = cloudMap["unit"] as String,
-            description = cloudMap["description"] as String,
-            salesmanId = cloudMap["salesmanId"] as String,
-            salesmanName = cloudMap["salesmanName"] as String,
-            salesmanPhone = cloudMap["salesmanPhone"] as String,
-            status = ProductSubmissionStatus.valueOf(cloudMap["status"] as String),
-            createdAt = cloudMap["createdAt"] as Long,
-            updatedAt = cloudMap["updatedAt"] as Long
-        )
-        adminDb.productSubmissionDao().insertSubmission(remoteSub)
+        // Admin device receives and applies remote submission using real CloudSyncManager logic
+        adminSyncManager.applyRemoteSubmissionMap(cloudMap)
 
         // Verify Admin now sees the submission in PENDING status
         val adminReceived = adminDb.productSubmissionDao().getSubmissionById("sub_prod_101")
@@ -133,7 +117,7 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals("করিম আহমেদ", adminReceived?.salesmanName)
     }
 
-    // 2. Admin approves product submission -> Salesman receives APPROVED status
+    // 2. Admin approves product submission -> Salesman receives APPROVED status AND approved Product in inventory
     @Test
     fun testAdminProductApprovalReflectsOnSalesmanDevice() = runTest(testDispatcher) {
         val submission = ProductSubmission(
@@ -155,40 +139,57 @@ class TwoDeviceSubmissionSyncTest {
         adminDb.productSubmissionDao().insertSubmission(submission)
 
         // Admin approves the submission
+        val approvedProductId = "prod_wallet_approved_102"
+        val reviewTime = System.currentTimeMillis()
         val approvedSub = submission.copy(
             status = ProductSubmissionStatus.APPROVED,
-            approvedProductId = "prod_wallet_approved_102",
+            approvedProductId = approvedProductId,
             reviewedByAdminId = adminId,
             reviewedByAdminName = "ম্যানেজার",
-            reviewedAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis() + 1000
+            reviewedAt = reviewTime,
+            updatedAt = reviewTime + 500
         )
         adminDb.productSubmissionDao().updateSubmission(approvedSub)
 
-        // Admin uploads approved submission
-        val cloudApprovedMap = CloudSyncManager.mapProductSubmissionToCloud(approvedSub, businessId)
-        assertEquals("APPROVED", cloudApprovedMap["status"])
-        assertEquals("prod_wallet_approved_102", cloudApprovedMap["approvedProductId"])
-
-        // Salesman device syncs remote approved submission
-        val salesmanExisting = salesmanDb.productSubmissionDao().getSubmissionById("sub_prod_102")
-        assertNotNull(salesmanExisting)
-        assertEquals(ProductSubmissionStatus.PENDING, salesmanExisting?.status)
-
-        // Apply updated data on Salesman device (replicating CloudSyncManager logic)
-        val updatedSalesmanSub = salesmanExisting!!.copy(
-            status = ProductSubmissionStatus.valueOf(cloudApprovedMap["status"] as String),
-            approvedProductId = cloudApprovedMap["approvedProductId"] as? String,
-            reviewedByAdminId = cloudApprovedMap["reviewedByAdminId"] as? String,
-            reviewedByAdminName = cloudApprovedMap["reviewedByAdminName"] as? String,
-            reviewedAt = cloudApprovedMap["reviewedAt"] as? Long,
-            updatedAt = cloudApprovedMap["updatedAt"] as Long
+        // Admin also adds the approved product to inventory
+        val approvedProduct = Product(
+            id = approvedProductId,
+            name = submission.name,
+            sku = submission.productCode,
+            category = submission.category,
+            purchasePrice = submission.purchasePrice,
+            sellingPrice = submission.sellingPrice,
+            currentStock = submission.initialStock,
+            unit = submission.unit,
+            isActive = true,
+            updatedAt = reviewTime + 500
         )
-        salesmanDb.productSubmissionDao().updateSubmission(updatedSalesmanSub)
+        adminDb.productDao().insertProduct(approvedProduct)
 
-        val salesmanFinal = salesmanDb.productSubmissionDao().getSubmissionById("sub_prod_102")
-        assertEquals("Salesman device must reflect APPROVED status", ProductSubmissionStatus.APPROVED, salesmanFinal?.status)
-        assertEquals("prod_wallet_approved_102", salesmanFinal?.approvedProductId)
+        // Admin uploads approved submission and approved product to Cloud
+        val cloudApprovedSubMap = CloudSyncManager.mapProductSubmissionToCloud(approvedSub, businessId)
+        val cloudApprovedProdMap = CloudSyncManager.mapProductToCloud(approvedProduct, businessId, isSalesman = false)
+        assertEquals("APPROVED", cloudApprovedSubMap["status"])
+        assertEquals(approvedProductId, cloudApprovedSubMap["approvedProductId"])
+
+        // Salesman device syncs remote approved submission via applyRemoteSubmissionMap
+        salesmanSyncManager.applyRemoteSubmissionMap(cloudApprovedSubMap)
+
+        // Salesman device syncs remote product via applyRemoteProductMap
+        salesmanSyncManager.applyRemoteProductMap(cloudApprovedProdMap, isSalesman = true)
+
+        // Verify Salesman submission record is now APPROVED
+        val salesmanFinalSub = salesmanDb.productSubmissionDao().getSubmissionById("sub_prod_102")
+        assertEquals("Salesman device must reflect APPROVED status", ProductSubmissionStatus.APPROVED, salesmanFinalSub?.status)
+        assertEquals(approvedProductId, salesmanFinalSub?.approvedProductId)
+
+        // Verify Salesman product inventory has the approved product with protected cost price
+        val salesmanProduct = salesmanDb.productDao().getProductById(approvedProductId)
+        assertNotNull("Salesman must have the approved product in local inventory", salesmanProduct)
+        assertEquals("লেদার মানিব্যাগ", salesmanProduct?.name)
+        assertEquals(510.0, salesmanProduct?.sellingPrice ?: 0.0, 0.001)
+        assertEquals(15.0, salesmanProduct?.currentStock ?: 0.0, 0.001)
+        assertEquals("Confidential purchase price must be 0 for salesman", 0.0, salesmanProduct?.purchasePrice ?: 0.0, 0.001)
     }
 
     // 3. Admin returns submission for correction -> Salesman sees NEEDS_CORRECTION and note
@@ -222,14 +223,8 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals("NEEDS_CORRECTION", cloudMap["status"])
         assertEquals("দয়া করে সঠিক সাইজ ও ফেব্রিক বিবরণ দিন", cloudMap["adminCorrectionNote"])
 
-        // Salesman device updates
-        val salesmanSub = salesmanDb.productSubmissionDao().getSubmissionById("sub_prod_103")!!
-        val updatedSalesmanSub = salesmanSub.copy(
-            status = ProductSubmissionStatus.valueOf(cloudMap["status"] as String),
-            adminCorrectionNote = cloudMap["adminCorrectionNote"] as String,
-            updatedAt = cloudMap["updatedAt"] as Long
-        )
-        salesmanDb.productSubmissionDao().updateSubmission(updatedSalesmanSub)
+        // Salesman device updates via real CloudSyncManager
+        salesmanSyncManager.applyRemoteSubmissionMap(cloudMap)
 
         val resultOnSalesman = salesmanDb.productSubmissionDao().getSubmissionById("sub_prod_103")
         assertEquals(ProductSubmissionStatus.NEEDS_CORRECTION, resultOnSalesman?.status)
@@ -268,22 +263,9 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals("PENDING", cloudMap["status"])
         assertEquals(businessId, cloudMap["businessId"])
 
-        // Admin receives and inserts
+        // Admin receives and applies remote expense using real CloudSyncManager
         assertNull(adminDb.expenseDao().getExpenseById("exp_travel_201"))
-        val adminExp = Expense(
-            id = cloudMap["id"] as String,
-            salesmanId = cloudMap["salesmanId"] as String,
-            salesmanName = cloudMap["salesmanName"] as String,
-            category = ExpenseCategory.valueOf(cloudMap["category"] as String),
-            source = ExpenseSource.valueOf(cloudMap["source"] as String),
-            amount = cloudMap["amount"] as Double,
-            description = cloudMap["description"] as String,
-            status = ExpenseStatus.valueOf(cloudMap["status"] as String),
-            adminNote = cloudMap["adminNote"] as String,
-            isDeleted = cloudMap["isDeleted"] as Boolean,
-            createdAt = cloudMap["createdAt"] as Long
-        )
-        adminDb.expenseDao().insertExpense(adminExp)
+        adminSyncManager.applyRemoteExpenseMap(cloudMap)
 
         val adminReceived = adminDb.expenseDao().getExpenseById("exp_travel_201")
         assertNotNull("Admin must receive the salesman expense", adminReceived)
@@ -324,23 +306,8 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals("অনুমোদিত ও ভাউচার পাস", cloudApprovedMap["adminNote"])
         assertEquals(reviewTime, cloudApprovedMap["reviewedAt"])
 
-        // Salesman device has existing expense with PENDING
-        val salesmanExisting = salesmanDb.expenseDao().getExpenseById("exp_food_202")
-        assertEquals(ExpenseStatus.PENDING, salesmanExisting?.status)
-
-        // Salesman applies remote update (matching updated CloudSyncManager syncExpenses logic)
-        val newStatus = ExpenseStatus.valueOf(cloudApprovedMap["status"] as String)
-        val newAdminNote = cloudApprovedMap["adminNote"] as String
-        val newReviewedAt = cloudApprovedMap["reviewedAt"] as? Long
-
-        if (salesmanExisting!!.status != newStatus || salesmanExisting.adminNote != newAdminNote || salesmanExisting.reviewedAt != newReviewedAt) {
-            val updatedSalesmanExpense = salesmanExisting.copy(
-                status = newStatus,
-                adminNote = newAdminNote,
-                reviewedAt = newReviewedAt ?: salesmanExisting.reviewedAt
-            )
-            salesmanDb.expenseDao().updateExpense(updatedSalesmanExpense)
-        }
+        // Salesman applies remote update using real CloudSyncManager
+        salesmanSyncManager.applyRemoteExpenseMap(cloudApprovedMap)
 
         // Verify Salesman device is now APPROVED with notes
         val salesmanFinal = salesmanDb.expenseDao().getExpenseById("exp_food_202")
@@ -349,7 +316,44 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals(reviewTime, salesmanFinal?.reviewedAt)
     }
 
-    // 6. Duplicate prevention: sync replay does not duplicate records
+    // 6. Admin rejects expense -> Salesman device updates from PENDING to REJECTED with adminNote
+    @Test
+    fun testAdminExpenseRejectionReflectsOnSalesmanDevice() = runTest(testDispatcher) {
+        val expense = Expense(
+            id = "exp_misc_203",
+            salesmanId = salesmanId,
+            salesmanName = "করিম আহমেদ",
+            category = ExpenseCategory.OTHER,
+            source = ExpenseSource.OWN_POCKET,
+            amount = 500.0,
+            description = "অপ্রয়োজনীয় ব্যক্তিগত খরচ",
+            status = ExpenseStatus.PENDING,
+            createdAt = System.currentTimeMillis()
+        )
+        salesmanDb.expenseDao().insertExpense(expense)
+        adminDb.expenseDao().insertExpense(expense)
+
+        val rejectTime = System.currentTimeMillis()
+        val rejectedExpense = expense.copy(
+            status = ExpenseStatus.REJECTED,
+            adminNote = "কোম্পানি পলিসি বহির্ভূত খরচ, অনুমোদনযোগ্য নয়",
+            reviewedAt = rejectTime
+        )
+        adminDb.expenseDao().updateExpense(rejectedExpense)
+
+        val cloudMap = CloudSyncManager.mapExpenseToCloud(rejectedExpense, businessId)
+        assertEquals("REJECTED", cloudMap["status"])
+
+        // Salesman device syncs remote rejection
+        salesmanSyncManager.applyRemoteExpenseMap(cloudMap)
+
+        val salesmanResult = salesmanDb.expenseDao().getExpenseById("exp_misc_203")
+        assertEquals(ExpenseStatus.REJECTED, salesmanResult?.status)
+        assertEquals("কোম্পানি পলিসি বহির্ভূত খরচ, অনুমোদনযোগ্য নয়", salesmanResult?.adminNote)
+        assertEquals(rejectTime, salesmanResult?.reviewedAt)
+    }
+
+    // 7. Duplicate prevention: sync replay does not duplicate records
     @Test
     fun testDuplicateSubmissionAndExpensePrevention() = runTest(testDispatcher) {
         val submission = ProductSubmission(

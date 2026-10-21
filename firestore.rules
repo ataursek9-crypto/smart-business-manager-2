@@ -25,12 +25,25 @@ service cloud.firestore {
 
     // Business ownership / staff helper
     function isBusinessOwner(businessId) {
-      return isSignedIn() && request.auth.uid == businessId;
+      return isSignedIn() && (
+        request.auth.uid == businessId ||
+        (exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+         get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.role == 'ADMIN' &&
+         get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
+        (exists(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.businessId == businessId &&
+         get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.role == 'ADMIN' &&
+         get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.isActive == true)
+      );
     }
 
     function isBusinessStaff(businessId) {
       return isSignedIn() && (
         request.auth.uid == businessId ||
+        (exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+         get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid) ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
         (request.auth.token.email != null &&
@@ -127,7 +140,12 @@ service cloud.firestore {
     // Business Scope Root
     match /businesses/{businessId} {
       allow get: if isSignedIn();
-      allow create, update, delete: if isBusinessOwner(businessId);
+      allow create: if isSignedIn() && (
+        request.auth.uid == businessId ||
+        incoming().ownerUid == request.auth.uid ||
+        isBusinessOwner(businessId)
+      );
+      allow update, delete: if isBusinessOwner(businessId);
 
       // 1. Products
       match /products/{productId} {

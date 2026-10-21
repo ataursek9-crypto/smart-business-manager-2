@@ -878,6 +878,15 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             when (val auth = repository.authenticateAdmin(phone, pin)) {
                 is BusinessRepository.AuthResult.Success -> {
                     _currentUser.value = auth.user
+                    val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
+                    val bizId = if (!existingBizId.isNullOrBlank()) existingBizId else auth.user.id
+                    CloudBusinessAuth.setStoredBusinessId(
+                        context = getApplication(),
+                        businessId = bizId,
+                        role = UserRole.ADMIN.name
+                    )
+                    _activeBusinessId.value = bizId
+                    syncManager.startProductsRealtimeListener()
                     onResult(true, "এডমিন প্যানেলে স্বাগতম, ${auth.user.name}!")
                 }
                 is BusinessRepository.AuthResult.Error -> {
@@ -1430,16 +1439,63 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun updateExpenseStatus(expense: Expense, newStatus: ExpenseStatus, note: String) {
-        val user = _currentUser.value ?: return
-        if (user.role != UserRole.ADMIN) return
+    fun updateExpenseStatus(
+        expense: Expense,
+        newStatus: ExpenseStatus,
+        note: String,
+        onComplete: ((Boolean, String) -> Unit)? = null
+    ) {
+        val user = _currentUser.value ?: run {
+            onComplete?.invoke(false, "অননুমোদিত: কোনো ব্যবহারকারী লগইন নেই!")
+            return
+        }
+        if (user.role != UserRole.ADMIN) {
+            onComplete?.invoke(false, "অননুমোদিত: শুধুমাত্র এডমিন খরচ অনুমোদন বা বাতিল করতে পারেন!")
+            return
+        }
         viewModelScope.launch {
-            repository.updateExpense(
-                expense.copy(status = newStatus, adminNote = note, reviewedAt = System.currentTimeMillis()),
-                user
-            )
-            _toastMessage.emit("খরচের স্ট্যাটাস আপডেট হয়েছে")
-            syncManager.triggerSync()
+            try {
+                val reviewTime = System.currentTimeMillis()
+                val updatedExpense = expense.copy(
+                    status = newStatus,
+                    adminNote = note.trim(),
+                    reviewedAt = reviewTime
+                )
+
+                // 1. Authoritative Cloud Write FIRST if Cloud Backend is active
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId().ifBlank { user.id }
+                    }
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        val expenseRef = firestore.collection("businesses")
+                            .document(businessId)
+                            .collection("expenses")
+                            .document(updatedExpense.id)
+
+                        val cloudMap = CloudSyncManager.mapExpenseToCloud(updatedExpense, businessId)
+                        expenseRef.set(cloudMap, SetOptions.merge()).awaitResult()
+                        Log.i("ExpenseApproval", "Authoritative cloud write succeeded for expense: ${updatedExpense.id}")
+                    }
+                }
+
+                // 2. Update local Room database ONLY after cloud write succeeds
+                repository.updateExpense(updatedExpense, user)
+
+                val statusTextBengali = if (newStatus == ExpenseStatus.APPROVED) "অনুমোদিত" else "বাতিল"
+                val successMessage = "খরচ সফলভাবে $statusTextBengali হয়েছে"
+                _toastMessage.emit(successMessage)
+                syncManager.triggerSync()
+                onComplete?.invoke(true, successMessage)
+            } catch (e: Exception) {
+                Log.e("ExpenseApproval", "Expense status update failed: ${e.message}", e)
+                val errMsg = "অনুমোদন ব্যর্থ হয়েছে: ${e.localizedMessage ?: e.message ?: "ক্লাউড ত্রুটি"}"
+                _toastMessage.emit(errMsg)
+                onComplete?.invoke(false, errMsg)
+            }
         }
     }
 

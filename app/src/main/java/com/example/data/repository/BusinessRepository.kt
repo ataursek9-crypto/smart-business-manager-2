@@ -679,7 +679,9 @@ class BusinessRepository(
 
     fun isAuthorizedAdminEmail(email: String): Boolean {
         val clean = email.trim().lowercase()
-        return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" || clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com"
+        return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
+               clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
+               clean == "ataulgonee786@gmail.com"
     }
 
     suspend fun updateAdminSecurityCredentials(
@@ -1184,6 +1186,10 @@ class BusinessRepository(
                 details = "এডমিন: ${adminUser.name}, পণ্য: ${existing.name}, সেলসম্যান: ${existing.salesmanName}, কারণ: ${reason.trim()}"
             )
         )
+    }
+
+    suspend fun getSubmissionById(submissionId: String): ProductSubmission? {
+        return db.productSubmissionDao().getSubmissionById(submissionId)
     }
 
     // --- Company & Supplier Due Management (কোম্পানির লেনদেন ও বকেয়া হিসাব) ---

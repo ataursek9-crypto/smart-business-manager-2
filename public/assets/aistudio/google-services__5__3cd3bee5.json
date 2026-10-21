@@ -18,6 +18,14 @@
           "client_type": 1,
           "android_info": {
             "package_name": "com.aistudio.smartbiz.mgr",
+            "certificate_hash": "cc86917eeb9c387577c490e9f319ab3db0458e67"
+          }
+        },
+        {
+          "client_id": "484040397249-h7a2qphlia4c2c6f11ecka4rjvbtjf5f.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.smartbiz.mgr",
             "certificate_hash": "2800200846ac075e40b8da178b6c953edfc04556"
           }
         },

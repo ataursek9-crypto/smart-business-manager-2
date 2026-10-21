@@ -34,8 +34,13 @@ fun SalesmanSubmittedProductsScreen(
     onBack: () -> Unit
 ) {
     BackHandler { onBack() }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val mySubmissions by viewModel.mySubmissions.collectAsStateWithLifecycle()
     var selectedFilter by remember { mutableStateOf<ProductSubmissionStatus?>(null) }
+
+    LaunchedEffect(Unit) {
+        viewModel.triggerSync()
+    }
 
     val filteredList = remember(mySubmissions, selectedFilter) {
         if (selectedFilter == null) mySubmissions
@@ -52,6 +57,16 @@ fun SalesmanSubmittedProductsScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            viewModel.triggerSync { _, msg ->
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.testTag("btn_sync_salesman_submissions")
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = "সিঙ্ক করুন", tint = Color.White)
+                    }
                     IconButton(
                         onClick = onNavigateToSubmitNew,
                         modifier = Modifier.testTag("btn_top_submit_new_product")

@@ -35,7 +35,14 @@ class CloudSyncManager(
     private val db: AppDatabase
 ) {
     companion object {
-        private const val TAG = "CloudSyncManager"
+        const val TAG = "CloudSyncManager"
+
+        fun isAuthorizedAdminEmail(email: String): Boolean {
+            val clean = email.trim().lowercase()
+            return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
+                   clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
+                   clean == "ataulgonee786@gmail.com"
+        }
 
         /**
          * Converts an asynchronous Google Play Services / Firebase Task into a suspending coroutine.
@@ -243,35 +250,42 @@ class CloudSyncManager(
         }
     }
 
+
     /**
      * Checks if current active session belongs to a salesman (staff) rather than admin (owner).
      */
     suspend fun isCurrentActiveSalesman(): Boolean {
+        val storedRole = CloudBusinessAuth.getStoredRole(context)
+        if (storedRole == UserRole.ADMIN.name) {
+            return false
+        }
+        if (storedRole == UserRole.SALESMAN.name) {
+            return true
+        }
+        val localUsers = db.userDao().getAllActiveUsersList()
+        if (localUsers.any { it.role == UserRole.ADMIN && it.isActive }) {
+            return false
+        }
         val authUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
         if (authUser != null) {
             val email = authUser.email?.trim()?.lowercase() ?: ""
-            if (email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" || email == "support@smartbiz.local" || email == "gonee8666@gmail.com") {
+            if (isAuthorizedAdminEmail(email)) {
                 return false
-            }
-            val storedRole = CloudBusinessAuth.getStoredRole(context)
-            if (storedRole == UserRole.ADMIN.name) {
-                return false
-            }
-            // If the user is connected to an active business that they do not own, they are a salesman
-            val activeBizId = CloudBusinessAuth.getStoredBusinessId(context)
-            if (!activeBizId.isNullOrBlank() && authUser.uid != activeBizId) {
-                return true
             }
             val localUser = db.userDao().getUserById(authUser.uid)
             if (localUser != null) {
                 return localUser.role == UserRole.SALESMAN
             }
+            val activeBizId = CloudBusinessAuth.getStoredBusinessId(context)
+            if (!activeBizId.isNullOrBlank() && authUser.uid != activeBizId) {
+                // If local active user is an admin, do not classify as salesman
+                if (localUsers.none { it.role == UserRole.ADMIN && it.isActive }) {
+                    return true
+                }
+            }
         }
-        val storedRole = CloudBusinessAuth.getStoredRole(context)
-        if (storedRole != null) {
-            return storedRole == UserRole.SALESMAN.name
-        }
-        return false
+        val currentUser = localUsers.firstOrNull()
+        return currentUser?.role == UserRole.SALESMAN
     }
 
     /**
@@ -292,19 +306,20 @@ class CloudSyncManager(
             throw IllegalStateException("অবৈধ ইউজার আইডি। ক্লাউড সিঙ্ক বাতিল করা হয়েছে।")
         }
 
+        // 1. Prioritize explicitly stored active multi-tenant Business ID
+        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
+        if (!storedBizId.isNullOrBlank()) {
+            return storedBizId
+        }
+
         val email = authUser.email?.trim()?.lowercase() ?: ""
-        val isOwner = email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" ||
-                email == "support@smartbiz.local" || email == "gonee8666@gmail.com" ||
-                CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
+        val storedRole = CloudBusinessAuth.getStoredRole(context)
+        val isOwner = isAuthorizedAdminEmail(email) ||
+                storedRole == UserRole.ADMIN.name
 
         if (isOwner) {
             CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
             return authUser.uid
-        }
-
-        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
-        if (!storedBizId.isNullOrBlank()) {
-            return storedBizId
         }
 
         throw IllegalStateException("অননুমোদিত স্টাফ ডিভাইস: কোনো অনুমোদিত ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে অ্যাডমিনের বিজনেস আইডি দিয়ে কানেক্ট করুন।")
@@ -320,19 +335,20 @@ class CloudSyncManager(
             null
         } ?: throw IllegalStateException("ক্লাউড সিঙ্ক করার জন্য গুগল একাউন্টে প্রমাণীকরণ আবশ্যক।")
 
+        // 1. Prioritize explicitly stored active multi-tenant Business ID
+        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
+        if (!storedBizId.isNullOrBlank()) {
+            return storedBizId
+        }
+
         val email = authUser.email?.trim()?.lowercase() ?: ""
-        val isOwner = email == "ataursek9@gmail.com" || email == "ataurgonee4@gmail.com" ||
-                email == "support@smartbiz.local" || email == "gonee8666@gmail.com" ||
-                CloudBusinessAuth.getStoredRole(context) == UserRole.ADMIN.name
+        val storedRole = CloudBusinessAuth.getStoredRole(context)
+        val isOwner = isAuthorizedAdminEmail(email) ||
+                storedRole == UserRole.ADMIN.name
 
         if (isOwner) {
             CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
             return authUser.uid
-        }
-
-        val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
-        if (!storedBizId.isNullOrBlank()) {
-            return storedBizId
         }
 
         // Attempt remote lookup in Firestore staff_memberships/{authUser.uid}
@@ -586,10 +602,18 @@ class CloudSyncManager(
         val isSalesman = isCurrentActiveSalesman()
 
         // 0. Synchronize Business Profile & Staff Membership
-        syncBusinessAndStaff(firestore, businessId, isSalesman)
+        try {
+            syncBusinessAndStaff(firestore, businessId, isSalesman)
+        } catch (e: Exception) {
+            Log.w(TAG, "Business profile & staff sync non-fatal note: ${e.message}")
+        }
 
         // 1. Synchronize Deletion Tombstones first to protect against resurrecting deleted items
-        syncTombstones(firestore, businessId, isSalesman)
+        try {
+            syncTombstones(firestore, businessId, isSalesman)
+        } catch (e: Exception) {
+            Log.w(TAG, "Tombstones sync non-fatal note: ${e.message}")
+        }
 
         // 2. Synchronize Products with stock and cost protection
         syncProducts(firestore, businessId, isSalesman)
@@ -639,6 +663,9 @@ class CloudSyncManager(
                         "role" to user.role.name,
                         "isActive" to (user.isActive && user.accountStatus == UserAccountStatus.ACTIVE),
                         "canDiscount" to user.canDiscount,
+                        "canViewCustomerDue" to user.canViewCustomerDue,
+                        "canCollectPayment" to user.canCollectPayment,
+                        "canApplyExpense" to user.canApplyExpense,
                         "businessId" to businessId,
                         "pinHash" to user.pinHash,
                         "updatedAt" to System.currentTimeMillis()
@@ -667,6 +694,26 @@ class CloudSyncManager(
                     }
                 }
             } catch (_: Exception) {}
+
+            // Salesman fetches own staff record to sync permissions configured by Admin
+            val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+            if (authUser != null) {
+                try {
+                    val staffDoc = bizDocRef.collection("staff").document(authUser.uid).get().awaitResult()
+                    if (staffDoc.exists()) {
+                        applyRemoteStaffDoc(staffDoc)
+                    } else {
+                        val localSalesman = db.userDao().getUserById(authUser.uid)
+                        val phoneToSearch = localSalesman?.phone?.let { CloudBusinessAuth.normalizePhone(it) }
+                        if (!phoneToSearch.isNullOrBlank()) {
+                            val phoneDoc = bizDocRef.collection("staff_by_phone").document(phoneToSearch).get().awaitResult()
+                            if (phoneDoc.exists()) {
+                                applyRemoteStaffDoc(phoneDoc)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -1018,46 +1065,61 @@ class CloudSyncManager(
     private suspend fun syncExpenses(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("expenses")
 
-        // 1. Download remote expenses first to retrieve Admin reviews, approvals, and rejections
+        // 1. If admin, upload local authoritative reviews/approvals/rejections first
+        if (!isSalesman) {
+            val localExpenses = db.expenseDao().getSyncExpenses()
+            for (expense in localExpenses) {
+                val data = mapExpenseToCloud(expense, businessId)
+                collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+            }
+        }
+
+        // 2. Download remote expenses
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
             applyRemoteExpenseDoc(doc)
         }
 
-        // 2. Upload local expenses
-        // If salesman: only upload PENDING active expenses submitted by this salesman (never overwrite approved/rejected records)
-        // If admin: upload all local real expenses (including approvals, rejections, and review notes)
-        val localExpenses = db.expenseDao().getSyncExpenses()
-        for (expense in localExpenses) {
-            if (isSalesman && (expense.status != ExpenseStatus.PENDING || expense.isDeleted)) {
-                continue
+        // 3. If salesman: only upload PENDING active expenses submitted by this salesman
+        if (isSalesman) {
+            val localExpenses = db.expenseDao().getSyncExpenses()
+            for (expense in localExpenses) {
+                if (expense.status != ExpenseStatus.PENDING || expense.isDeleted) {
+                    continue
+                }
+                val data = mapExpenseToCloud(expense, businessId)
+                collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
             }
-            val data = mapExpenseToCloud(expense, businessId)
-            collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
         }
     }
 
     suspend fun applyRemoteExpenseDoc(doc: DocumentSnapshot) {
-        val id = doc.getString("id") ?: doc.id
+        val data = doc.data?.toMutableMap() ?: mutableMapOf()
+        if (!data.containsKey("id")) data["id"] = doc.id
+        applyRemoteExpenseMap(data)
+    }
+
+    suspend fun applyRemoteExpenseMap(data: Map<String, Any?>) {
+        val id = data["id"] as? String ?: return
         val tombstone = db.recycleBinDao().getItemByOriginalId("expenses", id)
         if (tombstone != null && !tombstone.isRestored) {
             return
         }
 
-        val salesmanId = doc.getString("salesmanId") ?: ""
-        val salesmanName = doc.getString("salesmanName") ?: ""
-        val categoryStr = doc.getString("category") ?: ExpenseCategory.OTHER.name
+        val salesmanId = data["salesmanId"] as? String ?: ""
+        val salesmanName = data["salesmanName"] as? String ?: ""
+        val categoryStr = data["category"] as? String ?: ExpenseCategory.OTHER.name
         val category = try { ExpenseCategory.valueOf(categoryStr) } catch (e: Exception) { ExpenseCategory.OTHER }
-        val sourceStr = doc.getString("source") ?: ExpenseSource.COMPANY_CASH.name
+        val sourceStr = data["source"] as? String ?: ExpenseSource.COMPANY_CASH.name
         val source = try { ExpenseSource.valueOf(sourceStr) } catch (e: Exception) { ExpenseSource.COMPANY_CASH }
-        val amount = (doc.get("amount") as? Number)?.toDouble() ?: doc.getDouble("amount") ?: 0.0
-        val description = doc.getString("description") ?: ""
-        val statusStr = doc.getString("status") ?: ExpenseStatus.APPROVED.name
-        val status = try { ExpenseStatus.valueOf(statusStr) } catch (e: Exception) { ExpenseStatus.APPROVED }
-        val adminNote = doc.getString("adminNote") ?: ""
-        val isDeleted = doc.getBoolean("isDeleted") ?: false
-        val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-        val reviewedAt = doc.getLong("reviewedAt")
+        val amount = (data["amount"] as? Number)?.toDouble() ?: 0.0
+        val description = data["description"] as? String ?: ""
+        val statusStr = data["status"] as? String ?: ExpenseStatus.PENDING.name
+        val status = try { ExpenseStatus.valueOf(statusStr) } catch (e: Exception) { ExpenseStatus.PENDING }
+        val adminNote = data["adminNote"] as? String ?: ""
+        val isDeleted = data["isDeleted"] as? Boolean ?: false
+        val createdAt = (data["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val reviewedAt = (data["reviewedAt"] as? Number)?.toLong()
 
         val existing = db.expenseDao().getExpenseById(id)
         if (existing == null) {
@@ -1077,7 +1139,17 @@ class CloudSyncManager(
                 isTestData = false
             )
             db.expenseDao().insertExpense(newExpense)
-        } else {
+            // Guard: If locally reviewed by Admin (APPROVED or REJECTED),
+            // never allow a stale remote PENDING snapshot to overwrite or downgrade it!
+            val isLocalReviewed = existing.status != ExpenseStatus.PENDING
+            val isRemotePending = status == ExpenseStatus.PENDING
+            if (isLocalReviewed && isRemotePending) {
+                return
+            }
+            if (existing.reviewedAt != null && reviewedAt != null && reviewedAt < existing.reviewedAt) {
+                return
+            }
+
             // Update local expense if status, note, review timestamp, amount, description or deletion state changed remotely
             if (existing.status != status ||
                 existing.adminNote != adminNote ||
@@ -1104,51 +1176,66 @@ class CloudSyncManager(
     private suspend fun syncProductSubmissions(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("product_submissions")
 
-        // 1. Download remote product submissions first to retrieve Admin review and approvals
+        // 1. If admin: upload local approvals, notes, and revisions first so cloud has the authoritative decisions!
+        if (!isSalesman) {
+            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+            for (sub in localSubmissions) {
+                val data = mapProductSubmissionToCloud(sub, businessId)
+                collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+            }
+        }
+
+        // 2. Download remote product submissions
         val snapshot = collection.get().awaitResult()
         for (doc in snapshot.documents) {
             applyRemoteSubmissionDoc(doc)
         }
 
-        // 2. Upload local product submissions
-        // If salesman: only upload PENDING or NEEDS_CORRECTION resubmissions (never overwrite APPROVED submissions)
-        // If admin: upload all local submissions (including approvals, notes, and revisions)
-        val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-        for (sub in localSubmissions) {
-            if (isSalesman && sub.status == ProductSubmissionStatus.APPROVED) {
-                continue
+        // 3. If salesman: upload local pending or needs_correction resubmissions
+        if (isSalesman) {
+            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+            for (sub in localSubmissions) {
+                if (sub.status == ProductSubmissionStatus.APPROVED) {
+                    continue
+                }
+                val data = mapProductSubmissionToCloud(sub, businessId)
+                collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
             }
-            val data = mapProductSubmissionToCloud(sub, businessId)
-            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
         }
     }
 
     suspend fun applyRemoteSubmissionDoc(doc: DocumentSnapshot) {
-        val id = doc.getString("id") ?: doc.id
-        val name = doc.getString("name") ?: ""
+        val data = doc.data?.toMutableMap() ?: mutableMapOf()
+        if (!data.containsKey("id")) data["id"] = doc.id
+        applyRemoteSubmissionMap(data)
+    }
+
+    suspend fun applyRemoteSubmissionMap(data: Map<String, Any?>) {
+        val id = data["id"] as? String ?: return
+        val name = data["name"] as? String ?: ""
         if (name.isBlank()) return
-        val productCode = doc.getString("productCode") ?: ""
-        val category = doc.getString("category") ?: "সাধারণ"
-        val purchasePrice = (doc.get("purchasePrice") as? Number)?.toDouble() ?: doc.getDouble("purchasePrice") ?: 0.0
-        val sellingPrice = (doc.get("sellingPrice") as? Number)?.toDouble() ?: doc.getDouble("sellingPrice") ?: 0.0
-        val initialStock = (doc.get("initialStock") as? Number)?.toDouble() ?: doc.getDouble("initialStock") ?: 0.0
-        val unit = doc.getString("unit") ?: "পিস"
-        val description = doc.getString("description") ?: ""
-        val salesmanId = doc.getString("salesmanId") ?: ""
-        val salesmanName = doc.getString("salesmanName") ?: ""
-        val salesmanPhone = doc.getString("salesmanPhone") ?: ""
-        val statusStr = doc.getString("status") ?: ProductSubmissionStatus.PENDING.name
+        val productCode = data["productCode"] as? String ?: ""
+        val category = data["category"] as? String ?: "সাধারণ"
+        val purchasePrice = (data["purchasePrice"] as? Number)?.toDouble() ?: 0.0
+        val sellingPrice = (data["sellingPrice"] as? Number)?.toDouble() ?: 0.0
+        val initialStock = (data["initialStock"] as? Number)?.toDouble() ?: 0.0
+        val unit = data["unit"] as? String ?: "পিস"
+        val description = data["description"] as? String ?: ""
+        val salesmanId = data["salesmanId"] as? String ?: ""
+        val salesmanName = data["salesmanName"] as? String ?: ""
+        val salesmanPhone = data["salesmanPhone"] as? String ?: ""
+        val statusStr = data["status"] as? String ?: ProductSubmissionStatus.PENDING.name
         val status = try { ProductSubmissionStatus.valueOf(statusStr) } catch (e: Exception) { ProductSubmissionStatus.PENDING }
-        val adminCorrectionNote = doc.getString("adminCorrectionNote") ?: ""
-        val approvedProductId = doc.getString("approvedProductId")
-        val reviewedByAdminId = doc.getString("reviewedByAdminId")
-        val reviewedByAdminName = doc.getString("reviewedByAdminName")
-        val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-        val updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
-        val reviewedAt = doc.getLong("reviewedAt")
-        val imageUri = doc.getString("imageUri")
-        val imageSource = doc.getString("imageSource") ?: "NONE"
-        val imageSourceInfo = doc.getString("imageSourceInfo") ?: ""
+        val adminCorrectionNote = data["adminCorrectionNote"] as? String ?: ""
+        val approvedProductId = data["approvedProductId"] as? String
+        val reviewedByAdminId = data["reviewedByAdminId"] as? String
+        val reviewedByAdminName = data["reviewedByAdminName"] as? String
+        val createdAt = (data["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val updatedAt = (data["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val reviewedAt = (data["reviewedAt"] as? Number)?.toLong()
+        val imageUri = data["imageUri"] as? String
+        val imageSource = data["imageSource"] as? String ?: "NONE"
+        val imageSourceInfo = data["imageSourceInfo"] as? String ?: ""
 
         val existing = db.productSubmissionDao().getSubmissionById(id)
         if (existing == null) {
@@ -1179,12 +1266,19 @@ class CloudSyncManager(
             )
             db.productSubmissionDao().insertSubmission(newSub)
         } else {
+            // Guard: If locally APPROVED by Admin, never let a stale remote PENDING snapshot revert it!
+            val isLocalApproved = existing.status == ProductSubmissionStatus.APPROVED
+            val isRemotePending = status == ProductSubmissionStatus.PENDING
+            if (isLocalApproved && isRemotePending) {
+                return
+            }
+
             // Update if status, admin notes, review data, or updatedAt changed remotely
             if (existing.status != status ||
                 existing.adminCorrectionNote != adminCorrectionNote ||
                 existing.approvedProductId != approvedProductId ||
                 existing.reviewedAt != reviewedAt ||
-                existing.updatedAt <= updatedAt) {
+                existing.updatedAt < updatedAt) {
                 val updatedSub = existing.copy(
                     name = name,
                     productCode = productCode,
