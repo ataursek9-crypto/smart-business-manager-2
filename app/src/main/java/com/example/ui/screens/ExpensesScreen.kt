@@ -43,6 +43,7 @@ fun ExpensesScreen(
     val isAdmin = currentUser?.role == UserRole.ADMIN
 
     LaunchedEffect(Unit) {
+        viewModel.fetchDirectExpenses()
         viewModel.triggerSync()
     }
 
@@ -69,6 +70,7 @@ fun ExpensesScreen(
                 actions = {
                     IconButton(
                         onClick = {
+                            viewModel.fetchDirectExpenses()
                             viewModel.triggerSync { _, msg ->
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }
@@ -138,9 +140,13 @@ fun ExpensesScreen(
     if (showReviewDialogForExpense != null) {
         val exp = showReviewDialogForExpense!!
         var adminNote by remember { mutableStateOf("") }
+        var isProcessing by remember { mutableStateOf(false) }
+        var errorMessage by remember { mutableStateOf<String?>(null) }
 
         AlertDialog(
-            onDismissRequest = { showReviewDialogForExpense = null },
+            onDismissRequest = {
+                if (!isProcessing) showReviewDialogForExpense = null
+            },
             title = { Text("খরচের আবেদন যাচাই ও অনুমোদন", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -155,26 +161,62 @@ fun ExpensesScreen(
                         value = adminNote,
                         onValueChange = { adminNote = it },
                         label = { Text("এডমিন মন্তব্য / কারণ (ঐচ্ছিক)") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isProcessing
                     )
+
+                    if (errorMessage != null) {
+                        Text(
+                            text = errorMessage!!,
+                            color = AccentRed,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            viewModel.updateExpenseStatus(exp, ExpenseStatus.APPROVED, adminNote)
-                            showReviewDialogForExpense = null
+                            isProcessing = true
+                            errorMessage = null
+                            viewModel.updateExpenseStatus(exp, ExpenseStatus.APPROVED, adminNote) { success, msg ->
+                                isProcessing = false
+                                if (success) {
+                                    showReviewDialogForExpense = null
+                                } else {
+                                    errorMessage = msg
+                                }
+                            }
                         },
+                        enabled = !isProcessing,
                         colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
                     ) {
+                        if (isProcessing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         Text("অনুমোদন")
                     }
                     Button(
                         onClick = {
-                            viewModel.updateExpenseStatus(exp, ExpenseStatus.REJECTED, adminNote)
-                            showReviewDialogForExpense = null
+                            isProcessing = true
+                            errorMessage = null
+                            viewModel.updateExpenseStatus(exp, ExpenseStatus.REJECTED, adminNote) { success, msg ->
+                                isProcessing = false
+                                if (success) {
+                                    showReviewDialogForExpense = null
+                                } else {
+                                    errorMessage = msg
+                                }
+                            }
                         },
+                        enabled = !isProcessing,
                         colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
                     ) {
                         Text("বাতিল")
@@ -182,7 +224,10 @@ fun ExpensesScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showReviewDialogForExpense = null }) {
+                TextButton(
+                    onClick = { showReviewDialogForExpense = null },
+                    enabled = !isProcessing
+                ) {
                     Text("বন্ধ করুন")
                 }
             }

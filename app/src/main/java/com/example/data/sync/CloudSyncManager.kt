@@ -200,7 +200,11 @@ class CloudSyncManager(
             sub.reviewedByAdminId?.let { map["reviewedByAdminId"] = it }
             sub.reviewedByAdminName?.let { map["reviewedByAdminName"] = it }
             sub.reviewedAt?.let { map["reviewedAt"] = it }
-            sub.imageUri?.let { map["imageUri"] = it }
+            sub.imageUri?.let { uri ->
+                if (uri.length <= 1000) {
+                    map["imageUri"] = uri
+                }
+            }
             return map
         }
 
@@ -431,6 +435,11 @@ class CloudSyncManager(
                 }
                 if (businessId.isBlank()) return@launch
 
+                val isSalesman = isCurrentActiveSalesman()
+                if (!isSalesman) {
+                    ensureBusinessDocExists(businessId, authUser.uid)
+                }
+
                 val firestore = FirebaseFirestore.getInstance()
 
                 // 1. Products Listener
@@ -445,11 +454,11 @@ class CloudSyncManager(
                         }
                         if (snapshot != null) {
                             scope.launch {
-                                val isSalesman = isCurrentActiveSalesman()
+                                val currentSalesman = isCurrentActiveSalesman()
                                 for (doc in snapshot.documents) {
                                     val data = doc.data?.toMutableMap() ?: mutableMapOf()
                                     if (!data.containsKey("id")) data["id"] = doc.id
-                                    applyRemoteProductMap(data, isSalesman)
+                                    applyRemoteProductMap(data, currentSalesman)
                                 }
                             }
                         }
@@ -466,6 +475,7 @@ class CloudSyncManager(
                             return@addSnapshotListener
                         }
                         if (snapshot != null) {
+                            Log.i(TAG, "[RealtimeSubmissions] Received ${snapshot.size()} submission documents from /businesses/$businessId/product_submissions")
                             scope.launch {
                                 for (doc in snapshot.documents) {
                                     applyRemoteSubmissionDoc(doc)
@@ -485,6 +495,7 @@ class CloudSyncManager(
                             return@addSnapshotListener
                         }
                         if (snapshot != null) {
+                            Log.i(TAG, "[RealtimeExpenses] Received ${snapshot.size()} expense documents from /businesses/$businessId/expenses")
                             scope.launch {
                                 for (doc in snapshot.documents) {
                                     applyRemoteExpenseDoc(doc)
@@ -497,6 +508,68 @@ class CloudSyncManager(
             } catch (e: Exception) {
                 Log.w(TAG, "Could not start realtime listeners: ${e.message}")
             }
+        }
+    }
+
+    suspend fun ensureBusinessDocExists(businessId: String, authUid: String, businessName: String = "স্মার্ট বিজনেস") {
+        if (businessId.isBlank() || authUid.isBlank() || businessId == "admin_1" || businessId == "salesman_1") return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val bizRef = firestore.collection("businesses").document(businessId)
+            val snapshot = bizRef.get().awaitResult()
+            if (!snapshot.exists()) {
+                val bizData = mapOf(
+                    "id" to businessId,
+                    "ownerUid" to authUid,
+                    "businessName" to businessName,
+                    "createdAt" to System.currentTimeMillis(),
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                bizRef.set(bizData, SetOptions.merge()).awaitResult()
+                Log.i(TAG, "Created root business doc: /businesses/$businessId with owner: $authUid")
+            } else {
+                val existingOwner = snapshot.getString("ownerUid")
+                if (existingOwner.isNullOrBlank()) {
+                    bizRef.update("ownerUid", authUid).awaitResult()
+                    Log.i(TAG, "Updated root business doc ownerUid on /businesses/$businessId: $authUid")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureBusinessDocExists non-fatal note: ${e.message}")
+        }
+    }
+
+    suspend fun fetchDirectProductSubmissions(businessId: String? = null) {
+        if (!isCloudBackendConfigured()) return
+        val bizId = businessId ?: try { resolveOrFetchBusinessId() } catch (_: Exception) { return }
+        if (bizId.isBlank()) return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val collection = firestore.collection("businesses").document(bizId).collection("product_submissions")
+            val snapshot = collection.get().awaitResult()
+            Log.i(TAG, "[fetchDirectProductSubmissions] Direct fetch returned ${snapshot.size()} docs from /businesses/$bizId/product_submissions")
+            for (doc in snapshot.documents) {
+                applyRemoteSubmissionDoc(doc)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[fetchDirectProductSubmissions] Direct fetch failed: ${e.message}", e)
+        }
+    }
+
+    suspend fun fetchDirectExpenses(businessId: String? = null) {
+        if (!isCloudBackendConfigured()) return
+        val bizId = businessId ?: try { resolveOrFetchBusinessId() } catch (_: Exception) { return }
+        if (bizId.isBlank()) return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val collection = firestore.collection("businesses").document(bizId).collection("expenses")
+            val snapshot = collection.get().awaitResult()
+            Log.i(TAG, "[fetchDirectExpenses] Direct fetch returned ${snapshot.size()} docs from /businesses/$bizId/expenses")
+            for (doc in snapshot.documents) {
+                applyRemoteExpenseDoc(doc)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[fetchDirectExpenses] Direct fetch failed: ${e.message}", e)
         }
     }
 
@@ -714,6 +787,52 @@ class CloudSyncManager(
                     }
                 } catch (_: Exception) {}
             }
+        }
+    }
+
+    private suspend fun applyRemoteStaffDoc(doc: DocumentSnapshot) {
+        val data = doc.data ?: return
+        val id = doc.getString("id") ?: doc.id
+        val name = doc.getString("name") ?: ""
+        val phone = doc.getString("phone") ?: ""
+        val roleStr = doc.getString("role") ?: UserRole.SALESMAN.name
+        val role = try { UserRole.valueOf(roleStr) } catch (_: Exception) { UserRole.SALESMAN }
+        val isActive = doc.getBoolean("isActive") ?: true
+        val canDiscount = doc.getBoolean("canDiscount") ?: true
+        val canViewCustomerDue = doc.getBoolean("canViewCustomerDue") ?: true
+        val canCollectPayment = doc.getBoolean("canCollectPayment") ?: true
+        val canApplyExpense = doc.getBoolean("canApplyExpense") ?: true
+        val pinHash = doc.getString("pinHash") ?: ""
+
+        val existingUser = db.userDao().getUserById(id)
+        if (existingUser != null) {
+            val updated = existingUser.copy(
+                name = if (name.isNotBlank()) name else existingUser.name,
+                phone = if (phone.isNotBlank()) phone else existingUser.phone,
+                role = role,
+                isActive = isActive,
+                accountStatus = if (isActive) UserAccountStatus.ACTIVE else UserAccountStatus.DEACTIVATED,
+                canDiscount = canDiscount,
+                canViewCustomerDue = canViewCustomerDue,
+                canCollectPayment = canCollectPayment,
+                canApplyExpense = canApplyExpense
+            )
+            db.userDao().updateUser(updated)
+        } else {
+            val newUser = User(
+                id = id,
+                name = if (name.isNotBlank()) name else "Salesman",
+                phone = phone,
+                role = role,
+                pinHash = pinHash,
+                isActive = isActive,
+                accountStatus = if (isActive) UserAccountStatus.ACTIVE else UserAccountStatus.DEACTIVATED,
+                canDiscount = canDiscount,
+                canViewCustomerDue = canViewCustomerDue,
+                canCollectPayment = canCollectPayment,
+                canApplyExpense = canApplyExpense
+            )
+            db.userDao().insertUser(newUser)
         }
     }
 
@@ -1064,31 +1183,53 @@ class CloudSyncManager(
 
     private suspend fun syncExpenses(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("expenses")
+        Log.i(TAG, "[syncExpenses] Starting sync for /businesses/$businessId/expenses (isSalesman=$isSalesman)")
 
         // 1. If admin, upload local authoritative reviews/approvals/rejections first
         if (!isSalesman) {
             val localExpenses = db.expenseDao().getSyncExpenses()
             for (expense in localExpenses) {
-                val data = mapExpenseToCloud(expense, businessId)
-                collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+                try {
+                    val data = mapExpenseToCloud(expense, businessId)
+                    collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+                } catch (e: Exception) {
+                    Log.e(TAG, "[syncExpenses] Admin review upload failed for ${expense.id}: ${e.message}", e)
+                }
             }
         }
 
         // 2. Download remote expenses
-        val snapshot = collection.get().awaitResult()
-        for (doc in snapshot.documents) {
-            applyRemoteExpenseDoc(doc)
+        var remoteExpenseDocs: List<DocumentSnapshot> = emptyList()
+        try {
+            val snapshot = collection.get().awaitResult()
+            remoteExpenseDocs = snapshot.documents
+            Log.i(TAG, "[syncExpenses] Downloaded ${snapshot.size()} expenses from /businesses/$businessId/expenses")
+            for (doc in snapshot.documents) {
+                applyRemoteExpenseDoc(doc)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[syncExpenses] Download remote expenses failed: ${e.message}", e)
         }
 
-        // 3. If salesman: only upload PENDING active expenses submitted by this salesman
+        // 3. If salesman: only upload PENDING active expenses that DO NOT already exist in cloud!
         if (isSalesman) {
             val localExpenses = db.expenseDao().getSyncExpenses()
+            val existingRemoteIds = remoteExpenseDocs.map { it.id }.toSet()
             for (expense in localExpenses) {
                 if (expense.status != ExpenseStatus.PENDING || expense.isDeleted) {
                     continue
                 }
-                val data = mapExpenseToCloud(expense, businessId)
-                collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+                // If it already exists in Firestore, never re-upload from salesman to prevent overwriting cloud approvals
+                if (existingRemoteIds.contains(expense.id)) {
+                    continue
+                }
+                try {
+                    val data = mapExpenseToCloud(expense, businessId)
+                    collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+                    Log.i(TAG, "[syncExpenses] Salesman uploaded new offline expense ${expense.id} to /businesses/$businessId/expenses")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[syncExpenses] Salesman expense upload failed for ${expense.id}: ${e.message}", e)
+                }
             }
         }
     }
@@ -1139,14 +1280,17 @@ class CloudSyncManager(
                 isTestData = false
             )
             db.expenseDao().insertExpense(newExpense)
+        } else {
             // Guard: If locally reviewed by Admin (APPROVED or REJECTED),
             // never allow a stale remote PENDING snapshot to overwrite or downgrade it!
             val isLocalReviewed = existing.status != ExpenseStatus.PENDING
             val isRemotePending = status == ExpenseStatus.PENDING
             if (isLocalReviewed && isRemotePending) {
+                Log.w(TAG, "[applyRemoteExpenseMap] Blocked stale remote PENDING overwrite for reviewed expense: $id")
                 return
             }
             if (existing.reviewedAt != null && reviewedAt != null && reviewedAt < existing.reviewedAt) {
+                Log.w(TAG, "[applyRemoteExpenseMap] Blocked older review timestamp overwrite for expense: $id")
                 return
             }
 
@@ -1169,37 +1313,60 @@ class CloudSyncManager(
                     isDeleted = isDeleted
                 )
                 db.expenseDao().updateExpense(updatedExpense)
+                Log.i(TAG, "[applyRemoteExpenseMap] Updated local expense $id to status $status")
             }
         }
     }
 
     private suspend fun syncProductSubmissions(firestore: FirebaseFirestore, businessId: String, isSalesman: Boolean) {
         val collection = firestore.collection("businesses").document(businessId).collection("product_submissions")
+        Log.i(TAG, "[syncProductSubmissions] Starting sync for /businesses/$businessId/product_submissions (isSalesman=$isSalesman)")
 
         // 1. If admin: upload local approvals, notes, and revisions first so cloud has the authoritative decisions!
         if (!isSalesman) {
             val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
             for (sub in localSubmissions) {
-                val data = mapProductSubmissionToCloud(sub, businessId)
-                collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                try {
+                    val data = mapProductSubmissionToCloud(sub, businessId)
+                    collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                } catch (e: Exception) {
+                    Log.e(TAG, "[syncProductSubmissions] Admin upload failed for submission ${sub.id}: ${e.message}", e)
+                }
             }
         }
 
         // 2. Download remote product submissions
-        val snapshot = collection.get().awaitResult()
-        for (doc in snapshot.documents) {
-            applyRemoteSubmissionDoc(doc)
+        var remoteSubmissionDocs: List<DocumentSnapshot> = emptyList()
+        try {
+            val snapshot = collection.get().awaitResult()
+            remoteSubmissionDocs = snapshot.documents
+            Log.i(TAG, "[syncProductSubmissions] Downloaded ${snapshot.size()} remote submissions from /businesses/$businessId/product_submissions")
+            for (doc in snapshot.documents) {
+                applyRemoteSubmissionDoc(doc)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[syncProductSubmissions] Download remote submissions failed: ${e.message}", e)
         }
 
-        // 3. If salesman: upload local pending or needs_correction resubmissions
+        // 3. If salesman: upload local pending or needs_correction resubmissions that are not already in cloud
         if (isSalesman) {
             val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+            val existingRemoteIds = remoteSubmissionDocs.map { it.id }.toSet()
             for (sub in localSubmissions) {
                 if (sub.status == ProductSubmissionStatus.APPROVED) {
                     continue
                 }
-                val data = mapProductSubmissionToCloud(sub, businessId)
-                collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                // If it already exists in Firestore as PENDING, don't continuously re-upload it
+                if (existingRemoteIds.contains(sub.id) && sub.status == ProductSubmissionStatus.PENDING) {
+                    continue
+                }
+                try {
+                    val data = mapProductSubmissionToCloud(sub, businessId)
+                    collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                    Log.i(TAG, "[syncProductSubmissions] Salesman uploaded submission ${sub.name} (${sub.id}) to /businesses/$businessId/product_submissions")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[syncProductSubmissions] Salesman upload failed for submission ${sub.id}: ${e.message}", e)
+                }
             }
         }
     }
@@ -1358,8 +1525,10 @@ object CloudBusinessAuth {
     private const val KEY_USER_ROLE = "active_cloud_user_role"
 
     fun getStoredBusinessId(context: Context): String? {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_BUSINESS_ID, null)?.trim()?.ifBlank { null }
+        if (raw == "admin_1" || raw == "salesman_1") return null
+        return raw
     }
 
     fun getStoredRole(context: Context): String? {
@@ -1373,8 +1542,10 @@ object CloudBusinessAuth {
     }
 
     fun setStoredBusinessId(context: Context, businessId: String, businessName: String? = null, role: String? = null) {
+        val clean = businessId.trim()
+        if (clean == "admin_1" || clean == "salesman_1" || clean.isBlank()) return
         val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-        editor.putString(KEY_BUSINESS_ID, businessId.trim())
+        editor.putString(KEY_BUSINESS_ID, clean)
         if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
         if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
         editor.apply()

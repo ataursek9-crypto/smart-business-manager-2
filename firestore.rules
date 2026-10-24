@@ -183,7 +183,7 @@ service cloud.firestore {
       match /expenses/{expenseId} {
         allow get, list: if isBusinessStaff(businessId);
         allow create: if isBusinessStaff(businessId) && isValidExpense(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
-        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && incoming().status == existing().status)) && isValidExpense(incoming());
+        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && existing().status == 'PENDING' && incoming().status == 'PENDING')) && isValidExpense(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
@@ -191,7 +191,7 @@ service cloud.firestore {
       match /product_submissions/{submissionId} {
         allow get, list: if isBusinessStaff(businessId);
         allow create: if isBusinessStaff(businessId) && isValidProductSubmission(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
-        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && (existing().status == 'NEEDS_CORRECTION' || incoming().status == 'PENDING'))) && isValidProductSubmission(incoming());
+        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && (existing().status == 'NEEDS_CORRECTION' || (existing().status == 'PENDING' && incoming().status == 'PENDING')))) && isValidProductSubmission(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
@@ -202,7 +202,7 @@ service cloud.firestore {
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 7. Staff Members - Owner manages staff accounts, pre-registered staff can link account
+      // 8. Staff Members - Owner manages staff accounts, authenticated staff can link own profile
       match /staff/{staffUid} {
         allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid || isBusinessStaff(businessId));
         allow list: if isBusinessOwner(businessId) || isBusinessStaff(businessId);
@@ -210,15 +210,7 @@ service cloud.firestore {
           isSignedIn() && request.auth.uid == staffUid &&
           incoming().isActive == true &&
           incoming().role == 'SALESMAN' &&
-          incoming().businessId == businessId &&
-          (
-            ('phone' in incoming() && incoming().phone is string && incoming().phone.size() > 0 &&
-             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)) &&
-             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true) ||
-            (request.auth.token.email != null &&
-             exists(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)) &&
-             get(/databases/$(database)/documents/businesses/$(businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true)
-          )
+          incoming().businessId == businessId
         );
         allow delete: if isBusinessOwner(businessId);
       }
@@ -244,17 +236,7 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && (
         (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
         (request.auth.uid == userId && incoming().businessId is string &&
-         incoming().role == 'SALESMAN' && incoming().isActive == true &&
-         (
-           (exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)) &&
-            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
-           ('phone' in incoming() && incoming().phone is string && incoming().phone.size() > 0 &&
-            exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)) &&
-            get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_phone/$(incoming().phone)).data.isActive == true) ||
-            (request.auth.token.email != null &&
-             exists(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_email/$(request.auth.token.email)) &&
-             get(/databases/$(database)/documents/businesses/$(incoming().businessId)/staff_by_email/$(request.auth.token.email)).data.isActive == true)
-         ))
+         incoming().role == 'SALESMAN' && incoming().isActive == true)
       );
       allow delete: if isSignedIn() && (
         request.auth.uid == userId ||

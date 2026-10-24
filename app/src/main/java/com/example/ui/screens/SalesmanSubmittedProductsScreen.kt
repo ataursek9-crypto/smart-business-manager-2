@@ -39,6 +39,8 @@ fun SalesmanSubmittedProductsScreen(
     var selectedFilter by remember { mutableStateOf<ProductSubmissionStatus?>(null) }
 
     LaunchedEffect(Unit) {
+        viewModel.fetchDirectProductSubmissions()
+        viewModel.syncManager.startProductsRealtimeListener()
         viewModel.triggerSync()
     }
 
@@ -59,6 +61,7 @@ fun SalesmanSubmittedProductsScreen(
                 actions = {
                     IconButton(
                         onClick = {
+                            viewModel.fetchDirectProductSubmissions()
                             viewModel.triggerSync { _, msg ->
                                 android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                             }

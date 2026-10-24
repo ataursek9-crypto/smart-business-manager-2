@@ -67,6 +67,8 @@ fun AdminProductApprovalScreen(
     var submissionToReturn by remember { mutableStateOf<ProductSubmission?>(null) }
 
     LaunchedEffect(Unit) {
+        viewModel.fetchDirectProductSubmissions()
+        viewModel.syncManager.startProductsRealtimeListener()
         viewModel.triggerSync()
     }
 
@@ -82,6 +84,7 @@ fun AdminProductApprovalScreen(
                 actions = {
                     IconButton(
                         onClick = {
+                            viewModel.fetchDirectProductSubmissions()
                             viewModel.triggerSync { _, msg ->
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }

@@ -21,6 +21,8 @@ import com.example.data.storage.SavedAccountManager
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import com.example.data.sync.CloudBusinessAuth
+import com.example.data.sync.CloudSyncManager
+import com.example.data.sync.CloudSyncManager.Companion.awaitResult
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -74,14 +76,16 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
     fun getActiveBusinessId(): String {
         val stored = CloudBusinessAuth.getStoredBusinessId(getApplication())
-        if (!stored.isNullOrBlank()) return stored
-        val current = _currentUser.value
-        if (current != null && current.role == UserRole.ADMIN) {
-            val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
-            val id = fUid ?: current.id
-            CloudBusinessAuth.setStoredBusinessId(getApplication(), id, role = UserRole.ADMIN.name)
-            _activeBusinessId.value = id
-            return id
+        if (!stored.isNullOrBlank() && stored != "admin_1" && stored != "salesman_1") return stored
+        val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (!fUid.isNullOrBlank()) {
+            val current = _currentUser.value
+            val role = if (current?.role == UserRole.SALESMAN) UserRole.SALESMAN.name else UserRole.ADMIN.name
+            if (role == UserRole.ADMIN.name) {
+                CloudBusinessAuth.setStoredBusinessId(getApplication(), fUid, role = role)
+                _activeBusinessId.value = fUid
+                return fUid
+            }
         }
         return ""
     }
@@ -879,13 +883,20 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 is BusinessRepository.AuthResult.Success -> {
                     _currentUser.value = auth.user
                     val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
-                    val bizId = if (!existingBizId.isNullOrBlank()) existingBizId else auth.user.id
-                    CloudBusinessAuth.setStoredBusinessId(
-                        context = getApplication(),
-                        businessId = bizId,
-                        role = UserRole.ADMIN.name
-                    )
-                    _activeBusinessId.value = bizId
+                    val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                    val bizId = if (!existingBizId.isNullOrBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1") {
+                        existingBizId
+                    } else {
+                        fUid ?: ""
+                    }
+                    if (bizId.isNotBlank()) {
+                        CloudBusinessAuth.setStoredBusinessId(
+                            context = getApplication(),
+                            businessId = bizId,
+                            role = UserRole.ADMIN.name
+                        )
+                        _activeBusinessId.value = bizId
+                    }
                     syncManager.startProductsRealtimeListener()
                     onResult(true, "এডমিন প্যানেলে স্বাগতম, ${auth.user.name}!")
                 }
@@ -1429,12 +1440,36 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         val user = _currentUser.value ?: return
         viewModelScope.launch {
             try {
-                repository.submitExpense(expense, user)
+                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val effectiveSalesmanId = authUser?.uid ?: expense.salesmanId.ifBlank { user.id }
+                val toSubmit = expense.copy(salesmanId = effectiveSalesmanId)
+                repository.submitExpense(toSubmit, user)
+
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId()
+                    }
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        val cloudMap = CloudSyncManager.mapExpenseToCloud(toSubmit, businessId)
+                        firestore.collection("businesses")
+                            .document(businessId)
+                            .collection("expenses")
+                            .document(toSubmit.id)
+                            .set(cloudMap, SetOptions.merge())
+                            .awaitResult()
+                        Log.i("ExpenseDiagnostics", "[ExpenseSubmit] Direct cloud upload SUCCEEDED -> /businesses/$businessId/expenses/${toSubmit.id}")
+                    }
+                }
+
                 _toastMessage.emit("খরচের আবেদন সফলভাবে দাখিল করা হয়েছে")
                 syncManager.triggerSync()
                 onComplete()
             } catch (e: Exception) {
-                _toastMessage.emit(e.message ?: "ত্রুটি হয়েছে")
+                Log.e("ExpenseDiagnostics", "[ExpenseSubmit] Expense submit error: ${e.message}", e)
+                _toastMessage.emit(e.localizedMessage ?: e.message ?: "ত্রুটি হয়েছে")
             }
         }
     }
@@ -1467,10 +1502,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     val businessId = try {
                         syncManager.resolveOrFetchBusinessId()
                     } catch (e: Exception) {
-                        getActiveBusinessId().ifBlank { user.id }
+                        getActiveBusinessId()
                     }
+                    val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                    Log.i("ExpenseDiagnostics", "[ExpenseApproval] StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, DocPath: /businesses/$businessId/expenses/${updatedExpense.id}")
+
                     if (businessId.isNotBlank()) {
                         val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                        }
+
                         val expenseRef = firestore.collection("businesses")
                             .document(businessId)
                             .collection("expenses")
@@ -1478,7 +1520,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
                         val cloudMap = CloudSyncManager.mapExpenseToCloud(updatedExpense, businessId)
                         expenseRef.set(cloudMap, SetOptions.merge()).awaitResult()
-                        Log.i("ExpenseApproval", "Authoritative cloud write succeeded for expense: ${updatedExpense.id}")
+                        Log.i("ExpenseDiagnostics", "[ExpenseApproval] Authoritative cloud write SUCCEEDED for expense: ${updatedExpense.id}")
+                    } else {
+                        throw IllegalStateException("কোনো সক্রিয় ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে গুগল সাইন-ইন নিশ্চিত করুন।")
                     }
                 }
 
@@ -1491,7 +1535,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 syncManager.triggerSync()
                 onComplete?.invoke(true, successMessage)
             } catch (e: Exception) {
-                Log.e("ExpenseApproval", "Expense status update failed: ${e.message}", e)
+                Log.e("ExpenseDiagnostics", "[ExpenseApproval] Expense status update FAILED: ${e.message}", e)
                 val errMsg = "অনুমোদন ব্যর্থ হয়েছে: ${e.localizedMessage ?: e.message ?: "ক্লাউড ত্রুটি"}"
                 _toastMessage.emit(errMsg)
                 onComplete?.invoke(false, errMsg)
@@ -1725,6 +1769,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     sellingPrice
                 }
+                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val effectiveSalesmanId = authUser?.uid ?: user.id
                 val subId = "sub_${System.currentTimeMillis()}"
                 val submission = ProductSubmission(
                     id = subId,
@@ -1736,7 +1782,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     initialStock = initialStock,
                     unit = unit.trim().ifBlank { "পিস" },
                     description = description.trim(),
-                    salesmanId = user.id,
+                    salesmanId = effectiveSalesmanId,
                     salesmanName = user.name,
                     salesmanPhone = user.phone,
                     status = ProductSubmissionStatus.PENDING,
@@ -1745,6 +1791,33 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     imageSourceInfo = imageSourceInfo
                 )
                 repository.submitProduct(submission, user)
+
+                // Direct authoritative cloud upload for immediate multi-device visibility
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId()
+                    }
+                    Log.i("SubmissionDiagnostics", "[ProductSubmit] StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, DocPath: /businesses/$businessId/product_submissions/${submission.id}")
+
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(submission, businessId)
+                        firestore.collection("businesses")
+                            .document(businessId)
+                            .collection("product_submissions")
+                            .document(submission.id)
+                            .set(cloudMap, SetOptions.merge())
+                            .awaitResult()
+                        Log.i("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload SUCCEEDED -> /businesses/$businessId/product_submissions/${submission.id}")
+                    } else {
+                        throw IllegalStateException("কোনো সক্রিয় ক্লাউড বিজনেস আইডি পাওয়া যায়নি। ক্লাউড বিজনেস কোড নিশ্চিত করুন।")
+                    }
+                } else {
+                    Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud backend not configured or unauthenticated on this device.")
+                }
+
                 _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে জমা দেওয়া হয়েছে")
                 syncManager.triggerSync()
                 onSuccess()
@@ -1770,7 +1843,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             } catch (e: Exception) {
-                onError(e.message ?: "প্রোডাক্ট জমা দিতে সমস্যা হয়েছে")
+                Log.e("SubmissionDiagnostics", "[ProductSubmit] Submission failed: ${e.message}", e)
+                onError(e.localizedMessage ?: e.message ?: "প্রোডাক্ট জমা দিতে সমস্যা হয়েছে")
             }
         }
     }
@@ -1799,6 +1873,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     sellingPrice
                 }
+                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val effectiveSalesmanId = authUser?.uid ?: user.id
                 val dummyUpdated = ProductSubmission(
                     id = submissionId,
                     name = name.trim(),
@@ -1809,7 +1885,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     initialStock = initialStock,
                     unit = unit.trim().ifBlank { "পিস" },
                     description = description.trim(),
-                    salesmanId = user.id,
+                    salesmanId = effectiveSalesmanId,
                     salesmanName = user.name,
                     salesmanPhone = user.phone,
                     imageUri = imageUri,
@@ -1817,11 +1893,38 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     imageSourceInfo = imageSourceInfo
                 )
                 repository.resubmitProductForCorrection(submissionId, dummyUpdated, user)
+
+                // Direct authoritative cloud upload for immediate multi-device visibility
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId()
+                    }
+                    Log.i("SubmissionDiagnostics", "[ProductResubmit] StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, DocPath: /businesses/$businessId/product_submissions/$submissionId")
+
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        val updatedFromDb = repository.getSubmissionById(submissionId) ?: dummyUpdated.copy(id = submissionId)
+                        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(updatedFromDb, businessId)
+                        firestore.collection("businesses")
+                            .document(businessId)
+                            .collection("product_submissions")
+                            .document(submissionId)
+                            .set(cloudMap, SetOptions.merge())
+                            .awaitResult()
+                        Log.i("SubmissionDiagnostics", "[ProductResubmit] Direct cloud resubmission SUCCEEDED for: $submissionId")
+                    } else {
+                        throw IllegalStateException("কোনো সক্রিয় ক্লাউড বিজনেস আইডি পাওয়া যায়নি।")
+                    }
+                }
+
                 _toastMessage.emit("সংশোধিত প্রোডাক্ট সফলভাবে পুনরায় জমা দেওয়া হয়েছে")
                 syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "প্রোডাক্ট পুনরায় জমা দিতে সমস্যা হয়েছে")
+                Log.e("SubmissionDiagnostics", "[ProductResubmit] Resubmission failed: ${e.message}", e)
+                onError(e.localizedMessage ?: e.message ?: "প্রোডাক্ট পুনরায় জমা দিতে সমস্যা হয়েছে")
             }
         }
     }
@@ -1841,11 +1944,45 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 val approved = repository.approveProductSubmission(submissionId, finalData, admin)
+
+                // Authoritative cloud write for immediate multi-device propagation
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId()
+                    }
+                    val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                    Log.i("SubmissionDiagnostics", "[ProductApproval] StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${admin.role}, SubId: $submissionId, ProdId: ${approved.id}")
+
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                        }
+                        val updatedSub = repository.getSubmissionById(submissionId)
+                        if (updatedSub != null) {
+                            val cloudSubMap = CloudSyncManager.mapProductSubmissionToCloud(updatedSub, businessId)
+                            firestore.collection("businesses").document(businessId)
+                                .collection("product_submissions").document(submissionId)
+                                .set(cloudSubMap, SetOptions.merge()).awaitResult()
+                        }
+                        val cloudProdMap = CloudSyncManager.mapProductToCloud(approved, businessId, isSalesman = false)
+                        firestore.collection("businesses").document(businessId)
+                            .collection("products").document(approved.id)
+                            .set(cloudProdMap, SetOptions.merge()).awaitResult()
+                        Log.i("SubmissionDiagnostics", "[ProductApproval] Authoritative cloud approval write SUCCEEDED for: $submissionId")
+                    } else {
+                        throw IllegalStateException("ক্লাউড অনুমোদন ব্যর্থ: কোনো সক্রিয় বিজনেস আইডি পাওয়া যায়নি।")
+                    }
+                }
+
                 _toastMessage.emit("'${approved.name}' সফলভাবে অনুমোদিত এবং মূল ইনভেন্টরিতে যুক্ত হয়েছে")
                 syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "প্রোডাক্ট অনুমোদন ব্যর্থ হয়েছে")
+                Log.e("SubmissionDiagnostics", "[ProductApproval] Direct cloud approval write FAILED: ${e.message}", e)
+                onError(e.localizedMessage ?: e.message ?: "প্রোডাক্ট অনুমোদন ব্যর্থ হয়েছে")
             }
         }
     }
@@ -1868,11 +2005,67 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 repository.returnProductForCorrection(submissionId, reason, admin)
+
+                // Authoritative cloud write for correction note
+                if (syncManager.isCloudBackendConfigured()) {
+                    val businessId = try {
+                        syncManager.resolveOrFetchBusinessId()
+                    } catch (e: Exception) {
+                        getActiveBusinessId()
+                    }
+                    val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                    Log.i("SubmissionDiagnostics", "[ProductReturn] StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${admin.role}, SubId: $submissionId")
+
+                    if (businessId.isNotBlank()) {
+                        val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                        }
+                        val updatedSub = repository.getSubmissionById(submissionId)
+                        if (updatedSub != null) {
+                            val cloudSubMap = CloudSyncManager.mapProductSubmissionToCloud(updatedSub, businessId)
+                            firestore.collection("businesses").document(businessId)
+                                .collection("product_submissions").document(submissionId)
+                                .set(cloudSubMap, SetOptions.merge()).awaitResult()
+                            Log.i("SubmissionDiagnostics", "[ProductReturn] Direct cloud return write SUCCEEDED for: $submissionId")
+                        }
+                    } else {
+                        throw IllegalStateException("কোনো সক্রিয় বিজনেস আইডি পাওয়া যায়নি।")
+                    }
+                }
+
                 _toastMessage.emit("প্রোডাক্টটি সংশোধনের জন্য ফেরত পাঠানো হয়েছে")
                 syncManager.triggerSync()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "প্রোডাক্ট ফেরত পাঠাতে ব্যর্থ হয়েছে")
+                Log.e("SubmissionDiagnostics", "[ProductReturn] Direct cloud return write FAILED: ${e.message}", e)
+                onError(e.localizedMessage ?: e.message ?: "প্রোডাক্ট ফেরত পাঠাতে ব্যর্থ হয়েছে")
+            }
+        }
+    }
+
+    fun fetchDirectProductSubmissions() {
+        viewModelScope.launch {
+            try {
+                val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
+                if (bizId.isNotBlank()) {
+                    syncManager.fetchDirectProductSubmissions(bizId)
+                }
+            } catch (e: Exception) {
+                Log.w("SubmissionDiagnostics", "fetchDirectProductSubmissions error: ${e.message}")
+            }
+        }
+    }
+
+    fun fetchDirectExpenses() {
+        viewModelScope.launch {
+            try {
+                val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
+                if (bizId.isNotBlank()) {
+                    syncManager.fetchDirectExpenses(bizId)
+                }
+            } catch (e: Exception) {
+                Log.w("ExpenseDiagnostics", "fetchDirectExpenses error: ${e.message}")
             }
         }
     }

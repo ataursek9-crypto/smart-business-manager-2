@@ -388,4 +388,108 @@ class TwoDeviceSubmissionSyncTest {
         val allExps = salesmanDb.expenseDao().getSyncExpenses()
         assertEquals("Re-inserting same expense ID must not duplicate", 1, allExps.count { it.id == "exp_dedup_01" })
     }
+
+    // 8. BUG 1 Verification: Approved/Rejected expense NEVER reverts to PENDING on subsequent syncs or stale replays
+    @Test
+    fun testExpenseApprovedStatusDoesNotRevertToPendingOnStaleSync() = runTest(testDispatcher) {
+        val expId = "exp_persistent_approval_801"
+        val expense = Expense(
+            id = expId,
+            salesmanId = salesmanId,
+            salesmanName = "করিম আহমেদ",
+            category = ExpenseCategory.TRAVEL,
+            source = ExpenseSource.COMPANY_CASH,
+            amount = 450.0,
+            description = "দূরপাল্লার যাতায়াত ভাড়া",
+            status = ExpenseStatus.PENDING,
+            createdAt = System.currentTimeMillis()
+        )
+        adminDb.expenseDao().insertExpense(expense)
+        salesmanDb.expenseDao().insertExpense(expense)
+
+        // Admin approves the expense
+        val reviewTimestamp = System.currentTimeMillis()
+        val approved = expense.copy(
+            status = ExpenseStatus.APPROVED,
+            adminNote = "ভাউচার যাচাই সম্পন্ন",
+            reviewedAt = reviewTimestamp
+        )
+        adminDb.expenseDao().updateExpense(approved)
+
+        // Verify locally approved on Admin device
+        val localApproved = adminDb.expenseDao().getExpenseById(expId)
+        assertEquals(ExpenseStatus.APPROVED, localApproved?.status)
+
+        // Stale remote cloud payload (still PENDING) arrives at Admin phone (e.g. from background queue or race condition)
+        val stalePendingMap = mapOf<String, Any?>(
+            "id" to expId,
+            "salesmanId" to salesmanId,
+            "salesmanName" to "করিম আহমেদ",
+            "category" to ExpenseCategory.TRAVEL.name,
+            "source" to ExpenseSource.COMPANY_CASH.name,
+            "amount" to 450.0,
+            "description" to "দূরপাল্লার যাতায়াত ভাড়া",
+            "status" to "PENDING",
+            "reviewedAt" to null,
+            "adminNote" to "",
+            "isDeleted" to false,
+            "createdAt" to expense.createdAt
+        )
+        adminSyncManager.applyRemoteExpenseMap(stalePendingMap)
+
+        // Crucial Assertion: Admin device MUST REMAIN APPROVED and NEVER revert to PENDING
+        val finalAdminExp = adminDb.expenseDao().getExpenseById(expId)
+        assertNotNull(finalAdminExp)
+        assertEquals("Admin approval MUST NOT revert back to PENDING when stale cloud payload arrives",
+            ExpenseStatus.APPROVED, finalAdminExp?.status)
+        assertEquals("ভাউচার যাচাই সম্পন্ন", finalAdminExp?.adminNote)
+        assertEquals(reviewTimestamp, finalAdminExp?.reviewedAt)
+    }
+
+    // 9. BUG 2 Verification: Shared Business Code connects two separate devices to the exact same business collection
+    @Test
+    fun testTwoDeviceSharedBusinessCodeProductSubmissionVisibility() = runTest(testDispatcher) {
+        val sharedBusinessCode = "BIZ-CLOTH-999"
+        val submissionId = "sub_shared_biz_777"
+
+        val salesmanSubmission = ProductSubmission(
+            id = submissionId,
+            name = "কাতান সিল্ক শাড়ি",
+            productCode = "SKU-KATAN-01",
+            category = "শাড়ি",
+            purchasePrice = 2500.0,
+            sellingPrice = 4250.0,
+            initialStock = 8.0,
+            unit = "পিস",
+            description = "খাঁটি কাতান সিল্ক শাড়ি",
+            salesmanId = salesmanId,
+            salesmanName = "করিম আহমেদ",
+            salesmanPhone = "01711000000",
+            status = ProductSubmissionStatus.PENDING,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+
+        // Salesman saves locally and maps to the shared business ID
+        salesmanDb.productSubmissionDao().insertSubmission(salesmanSubmission)
+        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(salesmanSubmission, sharedBusinessCode)
+        assertEquals(sharedBusinessCode, cloudMap["businessId"])
+        assertEquals("PENDING", cloudMap["status"])
+
+        // Admin device (on separate phone using the exact same shared business code) receives and applies submission
+        assertNull(adminDb.productSubmissionDao().getSubmissionById(submissionId))
+        adminSyncManager.applyRemoteSubmissionMap(cloudMap)
+
+        // Admin device must immediately see this submission in PENDING status
+        val receivedOnAdmin = adminDb.productSubmissionDao().getSubmissionById(submissionId)
+        assertNotNull("Admin device using shared business code MUST receive salesman product submission", receivedOnAdmin)
+        assertEquals(ProductSubmissionStatus.PENDING, receivedOnAdmin?.status)
+        assertEquals("কাতান সিল্ক শাড়ি", receivedOnAdmin?.name)
+        assertEquals(2500.0, receivedOnAdmin?.purchasePrice ?: 0.0, 0.001)
+        assertEquals(4250.0, receivedOnAdmin?.sellingPrice ?: 0.0, 0.001)
+
+        // Verify it remains PENDING until Admin explicitly approves it
+        assertEquals(ProductSubmissionStatus.PENDING, receivedOnAdmin?.status)
+        assertNull("Approved product ID must be null while pending", receivedOnAdmin?.approvedProductId)
+    }
 }
