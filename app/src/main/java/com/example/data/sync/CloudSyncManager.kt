@@ -296,13 +296,21 @@ class CloudSyncManager(
             }
         }
 
-        // 3. Check non-default local users in Room (ignore seeded admin_1 / salesman_1 defaults)
+        // 3. Check local users in Room
         val allUsers = db.userDao().getAllActiveUsersList()
         val nonDefaultUsers = allUsers.filter { it.id != "admin_1" && it.id != "salesman_1" && it.isActive }
         if (nonDefaultUsers.isNotEmpty()) {
             val activeUser = nonDefaultUsers.first()
             CloudBusinessAuth.setStoredRole(context, activeUser.role.name)
             return activeUser.role == UserRole.SALESMAN
+        }
+
+        // Check seeded or any active user role
+        val activeSalesman = allUsers.firstOrNull { it.role == UserRole.SALESMAN && it.isActive }
+        val activeAdmin = allUsers.firstOrNull { it.role == UserRole.ADMIN && it.isActive }
+        if (activeSalesman != null && activeAdmin == null) {
+            CloudBusinessAuth.setStoredRole(context, UserRole.SALESMAN.name)
+            return true
         }
 
         // 4. If storedBizId is configured and no Admin is actively logged in, treat as salesman
@@ -1258,9 +1266,11 @@ class CloudSyncManager(
 
         // 1. Download remote expenses FIRST so we have latest server approvals and status
         var remoteExpenseDocs: List<DocumentSnapshot> = emptyList()
+        var remoteFetchSucceeded = false
         try {
             val snapshot = collection.get().awaitResult()
             remoteExpenseDocs = snapshot.documents
+            remoteFetchSucceeded = true
             Log.i(TAG, "[syncExpenses] Downloaded ${snapshot.size()} expenses from /businesses/$businessId/expenses")
             for (doc in snapshot.documents) {
                 applyRemoteExpenseDoc(doc)
@@ -1275,18 +1285,22 @@ class CloudSyncManager(
         if (!isSalesman) {
             val localExpenses = db.expenseDao().getSyncExpenses()
             for (expense in localExpenses) {
-                val remoteDoc = remoteExpensesById[expense.id]
-                val remoteStatusStr = remoteDoc?.getString("status")
-
-                // CRITICAL SAFETY GUARD:
-                // Admin must NEVER upload an expense as PENDING if remote doc is already APPROVED!
-                if (expense.status == ExpenseStatus.PENDING && remoteStatusStr == ExpenseStatus.APPROVED.name) {
+                // ABSOLUTE RULE: Admin must NEVER upload an expense with status PENDING!
+                // An Admin only approves or rejects expenses, or creates approved expenses.
+                // An unreviewed PENDING expense belongs to a salesman submission and must NEVER be uploaded by admin.
+                if (expense.status == ExpenseStatus.PENDING) {
                     continue
                 }
 
+                val remoteDoc = remoteExpensesById[expense.id]
+                val remoteStatusStr = remoteDoc?.getString("status")
+                val remoteReviewedAt = remoteDoc?.getLong("reviewedAt") ?: 0L
+
+                // Only upload if doc does not exist remotely, or status changed remotely,
+                // or local reviewedAt is newer than remote reviewedAt
                 val shouldUpload = remoteDoc == null ||
-                        (expense.status != ExpenseStatus.PENDING && remoteStatusStr != expense.status.name) ||
-                        (expense.reviewedAt != null && (remoteDoc.getLong("reviewedAt") ?: 0L) < expense.reviewedAt)
+                        remoteStatusStr != expense.status.name ||
+                        (expense.reviewedAt != null && remoteReviewedAt < expense.reviewedAt)
 
                 if (shouldUpload) {
                     try {
@@ -1304,11 +1318,16 @@ class CloudSyncManager(
         if (isSalesman) {
             val localExpenses = db.expenseDao().getSyncExpenses()
             for (expense in localExpenses) {
+                // Salesman NEVER re-uploads approved, rejected, or deleted expenses
                 if (expense.status != ExpenseStatus.PENDING || expense.isDeleted) {
                     continue
                 }
                 // If it already exists in Firestore, NEVER re-upload from salesman to prevent overwriting cloud approvals
                 if (remoteExpensesById.containsKey(expense.id)) {
+                    continue
+                }
+                // If remote fetch failed, do not blindly upload all local records to avoid overwriting cloud state
+                if (!remoteFetchSucceeded) {
                     continue
                 }
                 try {
@@ -1369,7 +1388,7 @@ class CloudSyncManager(
             )
             db.expenseDao().insertExpense(newExpense)
         } else {
-            // Guard: If locally reviewed by Admin (APPROVED or REJECTED),
+            // Guard: If locally reviewed (APPROVED or REJECTED),
             // never allow a stale remote PENDING snapshot to overwrite or downgrade it!
             val isLocalReviewed = existing.status != ExpenseStatus.PENDING
             val isRemotePending = status == ExpenseStatus.PENDING
@@ -1377,8 +1396,16 @@ class CloudSyncManager(
                 Log.w(TAG, "[applyRemoteExpenseMap] Blocked stale remote PENDING overwrite for reviewed expense: $id")
                 return
             }
+            if (existing.status == ExpenseStatus.APPROVED && status == ExpenseStatus.PENDING) {
+                Log.w(TAG, "[applyRemoteExpenseMap] Blocked attempt to revert APPROVED expense: $id to PENDING")
+                return
+            }
             if (existing.reviewedAt != null && reviewedAt != null && reviewedAt < existing.reviewedAt) {
                 Log.w(TAG, "[applyRemoteExpenseMap] Blocked older review timestamp overwrite for expense: $id")
+                return
+            }
+            if (existing.status != ExpenseStatus.PENDING && reviewedAt == null && status == ExpenseStatus.PENDING) {
+                Log.w(TAG, "[applyRemoteExpenseMap] Blocked unreviewed payload for reviewed expense: $id")
                 return
             }
 
@@ -1429,12 +1456,22 @@ class CloudSyncManager(
         if (!isSalesman) {
             val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
             for (sub in localSubmissions) {
+                // Admin NEVER uploads an unreviewed PENDING submission
+                if (sub.status == ProductSubmissionStatus.PENDING) {
+                    continue
+                }
                 val remoteDoc = remoteSubmissionsById[sub.id]
-                // Only upload if it's reviewed locally or does not exist remotely
-                if (sub.status != ProductSubmissionStatus.PENDING || remoteDoc == null) {
+                val remoteStatusStr = remoteDoc?.getString("status")
+                val remoteUpdatedAt = remoteDoc?.getLong("updatedAt") ?: 0L
+                val shouldUpload = remoteDoc == null ||
+                        remoteStatusStr != sub.status.name ||
+                        remoteUpdatedAt < sub.updatedAt
+
+                if (shouldUpload) {
                     try {
                         val data = mapProductSubmissionToCloud(sub, businessId)
                         collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                        Log.i(TAG, "[syncProductSubmissions] Admin uploaded authoritative review for submission ${sub.id}: status=${sub.status}")
                     } catch (e: Exception) {
                         Log.e(TAG, "[syncProductSubmissions] Admin upload failed for submission ${sub.id}: ${e.message}", e)
                     }
@@ -1636,10 +1673,11 @@ object CloudBusinessAuth {
     }
 
     fun setStoredBusinessId(context: Context, businessId: String, businessName: String? = null, role: String? = null) {
-        val clean = businessId.trim()
-        if (clean == "admin_1" || clean == "salesman_1" || clean.isBlank()) return
         val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-        editor.putString(KEY_BUSINESS_ID, clean)
+        val clean = businessId.trim()
+        if (clean.isNotBlank() && clean != "admin_1" && clean != "salesman_1") {
+            editor.putString(KEY_BUSINESS_ID, clean)
+        }
         if (!businessName.isNullOrBlank()) editor.putString(KEY_BUSINESS_NAME, businessName.trim())
         if (!role.isNullOrBlank()) editor.putString(KEY_USER_ROLE, role.trim())
         editor.apply()

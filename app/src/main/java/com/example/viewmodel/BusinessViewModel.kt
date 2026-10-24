@@ -862,6 +862,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         onResult(false, "অননুমোদিত অ্যাকাউন্ট! এটি সাধারণ বিক্রয় কর্মীদের লগইন স্ক্রিন।")
                     } else {
                         _currentUser.value = auth.user
+                        CloudBusinessAuth.setStoredRole(getApplication(), UserRole.SALESMAN.name)
                         val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
                         CloudBusinessAuth.setStoredBusinessId(
                             context = getApplication(),
@@ -894,6 +895,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             when (val auth = repository.authenticateAdmin(phone, pin)) {
                 is BusinessRepository.AuthResult.Success -> {
                     _currentUser.value = auth.user
+                    CloudBusinessAuth.setStoredRole(getApplication(), UserRole.ADMIN.name)
                     val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
                     val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
                     val bizId = if (!existingBizId.isNullOrBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1") {
@@ -1492,6 +1494,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val toSubmit = expense.copy(salesmanId = effectiveSalesmanId)
                 repository.submitExpense(toSubmit, user)
 
+                var cloudUploaded = false
                 if (syncManager.isCloudBackendConfigured()) {
                     val businessId = try {
                         syncManager.resolveOrFetchBusinessId()
@@ -1500,6 +1503,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     }
                     if (businessId.isNotBlank()) {
                         val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
+                        }
                         val cloudMap = CloudSyncManager.mapExpenseToCloud(toSubmit, businessId)
                         firestore.collection("businesses")
                             .document(businessId)
@@ -1507,11 +1513,18 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             .document(toSubmit.id)
                             .set(cloudMap, SetOptions.merge())
                             .awaitResult()
+                        cloudUploaded = true
                         Log.i("ExpenseDiagnostics", "[ExpenseSubmit] Direct cloud upload SUCCEEDED -> /businesses/$businessId/expenses/${toSubmit.id}")
                     }
                 }
 
-                _toastMessage.emit("খরচের আবেদন সফলভাবে দাখিল করা হয়েছে")
+                if (cloudUploaded) {
+                    _toastMessage.emit("খরচের আবেদন ক্লাউডে সফলভাবে দাখিল করা হয়েছে")
+                } else if (!syncManager.isCloudBackendConfigured()) {
+                    _toastMessage.emit("খরচ লোকালভাবে সংরক্ষিত। অ্যাডমিনের ফোনে পাঠাতে গুগল সাইন-ইন ও বিজনেস কোড দিন।")
+                } else {
+                    _toastMessage.emit("খরচের আবেদন সফলভাবে দাখিল করা হয়েছে")
+                }
                 syncManager.triggerSync()
                 onComplete()
             } catch (e: Exception) {
@@ -1841,6 +1854,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 repository.submitProduct(submission, user)
 
                 // Direct authoritative cloud upload for immediate multi-device visibility
+                var cloudUploaded = false
                 if (syncManager.isCloudBackendConfigured()) {
                     val businessId = try {
                         syncManager.resolveOrFetchBusinessId()
@@ -1861,6 +1875,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             .document(submission.id)
                             .set(cloudMap, SetOptions.merge())
                             .awaitResult()
+                        cloudUploaded = true
                         Log.i("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload SUCCEEDED -> /businesses/$businessId/product_submissions/${submission.id}")
                     } else {
                         throw IllegalStateException("কোনো সক্রিয় ক্লাউড বিজনেস আইডি পাওয়া যায়নি। ক্লাউড বিজনেস কোড নিশ্চিত করুন।")
@@ -1869,7 +1884,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud backend not configured or unauthenticated on this device.")
                 }
 
-                _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে জমা দেওয়া হয়েছে")
+                if (cloudUploaded) {
+                    _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে ক্লাউডে জমা দেওয়া হয়েছে")
+                } else if (!syncManager.isCloudBackendConfigured()) {
+                    _toastMessage.emit("প্রোডাক্ট লোকালভাবে সংরক্ষিত। অ্যাডমিনের ফোনে পাঠাতে গুগল সাইন-ইন ও বিজনেস কোড দিন।")
+                } else {
+                    _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে জমা দেওয়া হয়েছে")
+                }
                 syncManager.triggerSync()
                 onSuccess()
 
