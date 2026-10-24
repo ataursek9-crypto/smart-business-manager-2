@@ -259,6 +259,7 @@ class CloudSyncManager(
      * Checks if current active session belongs to a salesman (staff) rather than admin (owner).
      */
     suspend fun isCurrentActiveSalesman(): Boolean {
+        // 1. Explicitly stored active session role in persistent preferences
         val storedRole = CloudBusinessAuth.getStoredRole(context)
         if (storedRole == UserRole.ADMIN.name) {
             return false
@@ -266,30 +267,51 @@ class CloudSyncManager(
         if (storedRole == UserRole.SALESMAN.name) {
             return true
         }
-        val localUsers = db.userDao().getAllActiveUsersList()
-        if (localUsers.any { it.role == UserRole.ADMIN && it.isActive }) {
-            return false
-        }
+
+        // 2. Check current authenticated Firebase user
         val authUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
         if (authUser != null) {
             val email = authUser.email?.trim()?.lowercase() ?: ""
             if (isAuthorizedAdminEmail(email)) {
+                CloudBusinessAuth.setStoredRole(context, UserRole.ADMIN.name)
                 return false
             }
+
+            val storedBizId = CloudBusinessAuth.getStoredBusinessId(context)
+            if (!storedBizId.isNullOrBlank() && authUser.uid == storedBizId) {
+                CloudBusinessAuth.setStoredRole(context, UserRole.ADMIN.name)
+                return false
+            }
+
             val localUser = db.userDao().getUserById(authUser.uid)
             if (localUser != null) {
+                CloudBusinessAuth.setStoredRole(context, localUser.role.name)
                 return localUser.role == UserRole.SALESMAN
             }
-            val activeBizId = CloudBusinessAuth.getStoredBusinessId(context)
-            if (!activeBizId.isNullOrBlank() && authUser.uid != activeBizId) {
-                // If local active user is an admin, do not classify as salesman
-                if (localUsers.none { it.role == UserRole.ADMIN && it.isActive }) {
-                    return true
-                }
+
+            // Salesman connected to another business ID
+            if (!storedBizId.isNullOrBlank() && authUser.uid != storedBizId) {
+                CloudBusinessAuth.setStoredRole(context, UserRole.SALESMAN.name)
+                return true
             }
         }
-        val currentUser = localUsers.firstOrNull()
-        return currentUser?.role == UserRole.SALESMAN
+
+        // 3. Check non-default local users in Room (ignore seeded admin_1 / salesman_1 defaults)
+        val allUsers = db.userDao().getAllActiveUsersList()
+        val nonDefaultUsers = allUsers.filter { it.id != "admin_1" && it.id != "salesman_1" && it.isActive }
+        if (nonDefaultUsers.isNotEmpty()) {
+            val activeUser = nonDefaultUsers.first()
+            CloudBusinessAuth.setStoredRole(context, activeUser.role.name)
+            return activeUser.role == UserRole.SALESMAN
+        }
+
+        // 4. If storedBizId is configured and no Admin is actively logged in, treat as salesman
+        val activeBizId = CloudBusinessAuth.getStoredBusinessId(context)
+        if (!activeBizId.isNullOrBlank() && (authUser == null || authUser.uid != activeBizId)) {
+            return true
+        }
+
+        return false
     }
 
     /**
@@ -534,8 +556,57 @@ class CloudSyncManager(
                     Log.i(TAG, "Updated root business doc ownerUid on /businesses/$businessId: $authUid")
                 }
             }
+            // Ensure owner membership index exists
+            ensureStaffLinked(businessId, authUid, role = UserRole.ADMIN.name, name = "এডমিন")
         } catch (e: Exception) {
             Log.w(TAG, "ensureBusinessDocExists non-fatal note: ${e.message}")
+        }
+    }
+
+    suspend fun ensureStaffLinked(
+        businessId: String,
+        authUid: String,
+        phone: String = "",
+        name: String = "",
+        role: String = UserRole.SALESMAN.name
+    ) {
+        if (businessId.isBlank() || authUid.isBlank() || businessId == "admin_1" || businessId == "salesman_1") return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            // 1. Ensure staff document exists under /businesses/{businessId}/staff/{authUid}
+            val staffRef = firestore.collection("businesses").document(businessId).collection("staff").document(authUid)
+            val staffSnap = staffRef.get().awaitResult()
+            if (!staffSnap.exists()) {
+                val staffData = mapOf(
+                    "id" to authUid,
+                    "name" to name.ifBlank { if (role == UserRole.ADMIN.name) "অ্যাডমিন" else "সেলস প্রতিনিধি" },
+                    "phone" to phone,
+                    "role" to role,
+                    "isActive" to true,
+                    "businessId" to businessId,
+                    "linkedAt" to System.currentTimeMillis()
+                )
+                staffRef.set(staffData, SetOptions.merge()).awaitResult()
+                Log.i(TAG, "ensureStaffLinked: Created /businesses/$businessId/staff/$authUid ($role)")
+            }
+
+            // 2. Ensure root /staff_memberships/{authUid} index exists
+            val memberRef = firestore.collection("staff_memberships").document(authUid)
+            val memberSnap = memberRef.get().awaitResult()
+            if (!memberSnap.exists()) {
+                val memberData = mapOf(
+                    "userId" to authUid,
+                    "businessId" to businessId,
+                    "role" to role,
+                    "isActive" to true,
+                    "phone" to phone,
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                memberRef.set(memberData, SetOptions.merge()).awaitResult()
+                Log.i(TAG, "ensureStaffLinked: Created /staff_memberships/$authUid ($role)")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureStaffLinked note: ${e.message}")
         }
     }
 
@@ -1185,20 +1256,7 @@ class CloudSyncManager(
         val collection = firestore.collection("businesses").document(businessId).collection("expenses")
         Log.i(TAG, "[syncExpenses] Starting sync for /businesses/$businessId/expenses (isSalesman=$isSalesman)")
 
-        // 1. If admin, upload local authoritative reviews/approvals/rejections first
-        if (!isSalesman) {
-            val localExpenses = db.expenseDao().getSyncExpenses()
-            for (expense in localExpenses) {
-                try {
-                    val data = mapExpenseToCloud(expense, businessId)
-                    collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
-                } catch (e: Exception) {
-                    Log.e(TAG, "[syncExpenses] Admin review upload failed for ${expense.id}: ${e.message}", e)
-                }
-            }
-        }
-
-        // 2. Download remote expenses
+        // 1. Download remote expenses FIRST so we have latest server approvals and status
         var remoteExpenseDocs: List<DocumentSnapshot> = emptyList()
         try {
             val snapshot = collection.get().awaitResult()
@@ -1211,16 +1269,46 @@ class CloudSyncManager(
             Log.e(TAG, "[syncExpenses] Download remote expenses failed: ${e.message}", e)
         }
 
-        // 3. If salesman: only upload PENDING active expenses that DO NOT already exist in cloud!
+        val remoteExpensesById = remoteExpenseDocs.associateBy { it.id }
+
+        // 2. If admin, upload local authoritative reviews/approvals/rejections or newly created admin expenses
+        if (!isSalesman) {
+            val localExpenses = db.expenseDao().getSyncExpenses()
+            for (expense in localExpenses) {
+                val remoteDoc = remoteExpensesById[expense.id]
+                val remoteStatusStr = remoteDoc?.getString("status")
+
+                // CRITICAL SAFETY GUARD:
+                // Admin must NEVER upload an expense as PENDING if remote doc is already APPROVED!
+                if (expense.status == ExpenseStatus.PENDING && remoteStatusStr == ExpenseStatus.APPROVED.name) {
+                    continue
+                }
+
+                val shouldUpload = remoteDoc == null ||
+                        (expense.status != ExpenseStatus.PENDING && remoteStatusStr != expense.status.name) ||
+                        (expense.reviewedAt != null && (remoteDoc.getLong("reviewedAt") ?: 0L) < expense.reviewedAt)
+
+                if (shouldUpload) {
+                    try {
+                        val data = mapExpenseToCloud(expense, businessId)
+                        collection.document(expense.id).set(data, SetOptions.merge()).awaitResult()
+                        Log.i(TAG, "[syncExpenses] Admin uploaded authoritative expense ${expense.id} with status ${expense.status}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[syncExpenses] Admin review upload failed for ${expense.id}: ${e.message}", e)
+                    }
+                }
+            }
+        }
+
+        // 3. If salesman: ONLY upload local PENDING expenses that DO NOT already exist in cloud!
         if (isSalesman) {
             val localExpenses = db.expenseDao().getSyncExpenses()
-            val existingRemoteIds = remoteExpenseDocs.map { it.id }.toSet()
             for (expense in localExpenses) {
                 if (expense.status != ExpenseStatus.PENDING || expense.isDeleted) {
                     continue
                 }
-                // If it already exists in Firestore, never re-upload from salesman to prevent overwriting cloud approvals
-                if (existingRemoteIds.contains(expense.id)) {
+                // If it already exists in Firestore, NEVER re-upload from salesman to prevent overwriting cloud approvals
+                if (remoteExpensesById.containsKey(expense.id)) {
                     continue
                 }
                 try {
@@ -1322,20 +1410,7 @@ class CloudSyncManager(
         val collection = firestore.collection("businesses").document(businessId).collection("product_submissions")
         Log.i(TAG, "[syncProductSubmissions] Starting sync for /businesses/$businessId/product_submissions (isSalesman=$isSalesman)")
 
-        // 1. If admin: upload local approvals, notes, and revisions first so cloud has the authoritative decisions!
-        if (!isSalesman) {
-            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-            for (sub in localSubmissions) {
-                try {
-                    val data = mapProductSubmissionToCloud(sub, businessId)
-                    collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
-                } catch (e: Exception) {
-                    Log.e(TAG, "[syncProductSubmissions] Admin upload failed for submission ${sub.id}: ${e.message}", e)
-                }
-            }
-        }
-
-        // 2. Download remote product submissions
+        // 1. Download remote product submissions FIRST
         var remoteSubmissionDocs: List<DocumentSnapshot> = emptyList()
         try {
             val snapshot = collection.get().awaitResult()
@@ -1348,16 +1423,35 @@ class CloudSyncManager(
             Log.e(TAG, "[syncProductSubmissions] Download remote submissions failed: ${e.message}", e)
         }
 
-        // 3. If salesman: upload local pending or needs_correction resubmissions that are not already in cloud
+        val remoteSubmissionsById = remoteSubmissionDocs.associateBy { it.id }
+
+        // 2. If admin: upload local approvals, notes, and revisions
+        if (!isSalesman) {
+            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+            for (sub in localSubmissions) {
+                val remoteDoc = remoteSubmissionsById[sub.id]
+                // Only upload if it's reviewed locally or does not exist remotely
+                if (sub.status != ProductSubmissionStatus.PENDING || remoteDoc == null) {
+                    try {
+                        val data = mapProductSubmissionToCloud(sub, businessId)
+                        collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[syncProductSubmissions] Admin upload failed for submission ${sub.id}: ${e.message}", e)
+                    }
+                }
+            }
+        }
+
+        // 3. If salesman: upload local pending or needs_correction resubmissions
         if (isSalesman) {
             val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-            val existingRemoteIds = remoteSubmissionDocs.map { it.id }.toSet()
             for (sub in localSubmissions) {
                 if (sub.status == ProductSubmissionStatus.APPROVED) {
                     continue
                 }
+                val remoteDoc = remoteSubmissionsById[sub.id]
                 // If it already exists in Firestore as PENDING, don't continuously re-upload it
-                if (existingRemoteIds.contains(sub.id) && sub.status == ProductSubmissionStatus.PENDING) {
+                if (remoteDoc != null && sub.status == ProductSubmissionStatus.PENDING) {
                     continue
                 }
                 try {
@@ -1561,6 +1655,16 @@ object CloudBusinessAuth {
             digits.length == 10 && digits.startsWith("1") -> "0$digits"
             else -> digits
         }
+    }
+
+    fun setStoredRole(context: Context, role: String?) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        if (role.isNullOrBlank()) {
+            editor.remove(KEY_USER_ROLE)
+        } else {
+            editor.putString(KEY_USER_ROLE, role.trim())
+        }
+        editor.apply()
     }
 
     fun clear(context: Context) {

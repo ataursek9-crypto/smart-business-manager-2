@@ -38,6 +38,7 @@ class GoogleAuthRoleMappingTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         app = ApplicationProvider.getApplicationContext()
+        com.example.data.sync.CloudBusinessAuth.clear(app)
         db = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
@@ -49,6 +50,7 @@ class GoogleAuthRoleMappingTest {
     fun tearDown() {
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         viewModel.syncManager.cancelActiveSync()
+        com.example.data.sync.CloudBusinessAuth.clear(app)
         Dispatchers.resetMain()
         db.close()
     }
@@ -71,6 +73,7 @@ class GoogleAuthRoleMappingTest {
         }
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertFalse("Unknown Google user must not be granted access", callbackSuccess == true)
         assertNull("Role must be null for unauthorized account", callbackRole)
@@ -94,6 +97,7 @@ class GoogleAuthRoleMappingTest {
         }
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertTrue("Primary business owner must succeed", callbackSuccess == true)
         assertEquals("Primary owner must be assigned ADMIN role", UserRole.ADMIN, callbackRole)
@@ -129,6 +133,7 @@ class GoogleAuthRoleMappingTest {
         }
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertTrue("Linking with correct PIN must succeed", linkSuccess == true)
         assertEquals("Assigned role must be SALESMAN", UserRole.SALESMAN, linkRole)
@@ -162,6 +167,7 @@ class GoogleAuthRoleMappingTest {
         }
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertFalse("Linking with incorrect PIN must fail", linkSuccess == true)
     }

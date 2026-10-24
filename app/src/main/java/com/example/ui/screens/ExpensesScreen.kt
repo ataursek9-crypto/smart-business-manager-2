@@ -43,6 +43,7 @@ fun ExpensesScreen(
     val isAdmin = currentUser?.role == UserRole.ADMIN
 
     LaunchedEffect(Unit) {
+        viewModel.syncManager.startProductsRealtimeListener()
         viewModel.fetchDirectExpenses()
         viewModel.triggerSync()
     }

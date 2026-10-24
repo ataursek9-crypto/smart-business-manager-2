@@ -492,4 +492,78 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals(ProductSubmissionStatus.PENDING, receivedOnAdmin?.status)
         assertNull("Approved product ID must be null while pending", receivedOnAdmin?.approvedProductId)
     }
+
+    // 10. Root Cause Test: Salesman phone with seeded admin_1 MUST be recognized as salesman
+    @Test
+    fun testSalesmanPhoneWithSeededAdminIsCorrectlyClassifiedAsSalesman() = runTest(testDispatcher) {
+        // Seed default admin_1 into salesmanDb just like AppDatabase seeds it on every real phone
+        val seededAdmin = User(
+            id = "admin_1",
+            name = "অ্যাডমিন (ডিফল্ট)",
+            phone = "01700000000",
+            role = UserRole.ADMIN,
+            pinHash = "hash_1234",
+            isActive = true
+        )
+        salesmanDb.userDao().insertUser(seededAdmin)
+
+        // Salesman logs in with salesman role and connects to business
+        CloudBusinessAuth.setStoredBusinessId(app, businessId, "টেস্ট ব্যবসা", UserRole.SALESMAN.name)
+
+        // Must evaluate to true (Salesman), NOT false (Admin)
+        val isSalesman = salesmanSyncManager.isCurrentActiveSalesman()
+        assertTrue("Salesman device with seeded admin_1 must be correctly identified as SALESMAN", isSalesman)
+
+        // Verify Admin phone with ADMIN role evaluates to false (Admin)
+        CloudBusinessAuth.setStoredBusinessId(app, businessId, "টেস্ট ব্যবসা", UserRole.ADMIN.name)
+        val isAdmin = adminSyncManager.isCurrentActiveSalesman()
+        assertFalse("Admin device must be identified as NOT salesman (ADMIN)", isAdmin)
+    }
+
+    // 11. Root Cause Test: Salesman sync must NEVER overwrite Admin approval back to PENDING
+    @Test
+    fun testExpenseApprovalPermanenceWhenSalesmanHasPendingLocally() = runTest(testDispatcher) {
+        val expId = "exp_cross_phone_permanence_901"
+        val pendingExpense = Expense(
+            id = expId,
+            salesmanId = salesmanId,
+            salesmanName = "করিম আহমেদ",
+            category = ExpenseCategory.FOOD,
+            source = ExpenseSource.COMPANY_CASH,
+            amount = 250.0,
+            description = "টিফিন খরচ",
+            status = ExpenseStatus.PENDING,
+            createdAt = 100000L
+        )
+
+        // Both devices initially have the pending expense
+        salesmanDb.expenseDao().insertExpense(pendingExpense)
+        adminDb.expenseDao().insertExpense(pendingExpense)
+
+        // Admin approves it
+        val reviewTimestamp = 200000L
+        val approvedExpense = pendingExpense.copy(
+            status = ExpenseStatus.APPROVED,
+            adminNote = "অনুমোদিত",
+            reviewedAt = reviewTimestamp
+        )
+        adminDb.expenseDao().updateExpense(approvedExpense)
+
+        // Cloud doc is APPROVED
+        val cloudApprovedMap = CloudSyncManager.mapExpenseToCloud(approvedExpense, businessId)
+        assertEquals("APPROVED", cloudApprovedMap["status"])
+
+        // Salesman device syncs remote approval
+        salesmanSyncManager.applyRemoteExpenseMap(cloudApprovedMap)
+        val salesmanAfterSync = salesmanDb.expenseDao().getExpenseById(expId)
+        assertEquals(ExpenseStatus.APPROVED, salesmanAfterSync?.status)
+
+        // Even if a stale local PENDING map is attempted on Admin device, it is blocked
+        val stalePendingPayload = CloudSyncManager.mapExpenseToCloud(pendingExpense, businessId)
+        adminSyncManager.applyRemoteExpenseMap(stalePendingPayload)
+
+        val finalAdminExpense = adminDb.expenseDao().getExpenseById(expId)
+        assertEquals("Admin expense must remain permanently APPROVED", ExpenseStatus.APPROVED, finalAdminExpense?.status)
+        assertEquals("অনুমোদিত", finalAdminExpense?.adminNote)
+    }
 }

@@ -79,6 +79,9 @@ fun AdminDashboardScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshActiveBusinessId()
+        viewModel.syncManager.startProductsRealtimeListener()
+        viewModel.fetchDirectProductSubmissions()
+        viewModel.fetchDirectExpenses()
         viewModel.triggerSync()
     }
 

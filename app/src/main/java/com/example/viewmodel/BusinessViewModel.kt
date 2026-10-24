@@ -862,6 +862,18 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         onResult(false, "অননুমোদিত অ্যাকাউন্ট! এটি সাধারণ বিক্রয় কর্মীদের লগইন স্ক্রিন।")
                     } else {
                         _currentUser.value = auth.user
+                        val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
+                        CloudBusinessAuth.setStoredBusinessId(
+                            context = getApplication(),
+                            businessId = existingBizId,
+                            role = UserRole.SALESMAN.name
+                        )
+                        val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                        if (fUid != null && existingBizId.isNotBlank()) {
+                            syncManager.ensureStaffLinked(existingBizId, fUid, auth.user.phone, auth.user.name, UserRole.SALESMAN.name)
+                        }
+                        syncManager.startProductsRealtimeListener()
+                        triggerSync()
                         onResult(true, "স্বাগতম, ${auth.user.name}!")
                     }
                 }
@@ -896,8 +908,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             role = UserRole.ADMIN.name
                         )
                         _activeBusinessId.value = bizId
+                        if (fUid != null) {
+                            syncManager.ensureBusinessDocExists(bizId, fUid)
+                            syncManager.ensureStaffLinked(bizId, fUid, auth.user.phone, auth.user.name, UserRole.ADMIN.name)
+                        }
                     }
                     syncManager.startProductsRealtimeListener()
+                    triggerSync()
                     onResult(true, "এডমিন প্যানেলে স্বাগতম, ${auth.user.name}!")
                 }
                 is BusinessRepository.AuthResult.Error -> {
@@ -910,6 +927,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
     fun logout() {
         _currentUser.value = null
+        CloudBusinessAuth.setStoredRole(getApplication(), null)
         try {
             com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
         } catch (_: Exception) {}
@@ -967,6 +985,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     return@launch
                 }
                 _currentUser.value = existingUserByUid
+                val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = existingBizId,
+                    role = existingUserByUid.role.name
+                )
+                if (existingBizId.isNotBlank()) {
+                    syncManager.ensureStaffLinked(existingBizId, existingUserByUid.id, existingUserByUid.phone, existingUserByUid.name, existingUserByUid.role.name)
+                }
+                syncManager.startProductsRealtimeListener()
+                triggerSync()
                 onResult(true, "স্বাগতম, ${existingUserByUid.name}!", existingUserByUid.role)
                 return@launch
             }
@@ -983,6 +1012,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     val linkedUser = existingUserByPhone.copy(id = uid)
                     repository.saveUserDirect(linkedUser)
                     _currentUser.value = linkedUser
+                    val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
+                    CloudBusinessAuth.setStoredBusinessId(
+                        context = getApplication(),
+                        businessId = existingBizId,
+                        role = linkedUser.role.name
+                    )
+                    if (existingBizId.isNotBlank()) {
+                        syncManager.ensureStaffLinked(existingBizId, uid, linkedUser.phone, linkedUser.name, linkedUser.role.name)
+                    }
+                    syncManager.startProductsRealtimeListener()
+                    triggerSync()
                     onResult(true, "স্বাগতম, ${linkedUser.name}!", linkedUser.role)
                     return@launch
                 }
@@ -1009,14 +1049,19 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 _activeBusinessId.value = uid
                 _currentUser.value = adminUser
-                syncManager.triggerSync()
+                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                    syncManager.ensureBusinessDocExists(uid, uid)
+                    syncManager.ensureStaffLinked(uid, uid, adminUser.phone, adminUser.name, UserRole.ADMIN.name)
+                }
+                syncManager.startProductsRealtimeListener()
+                triggerSync()
                 onResult(true, "এডমিন প্যানেলে স্বাগতম, ${adminUser.name}!", UserRole.ADMIN)
                 return@launch
             }
 
             // 4. Check if this Google user has a registered staff membership in Firestore
             try {
-                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                if (FirebaseApp.getApps(getApplication()).isNotEmpty() && FirebaseAuth.getInstance().currentUser != null) {
                     val firestore = FirebaseFirestore.getInstance()
                     val memberDoc = withTimeoutOrNull(2500L) {
                         firestore.collection("staff_memberships").document(uid).get().await()
@@ -1044,6 +1089,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             )
                             _activeBusinessId.value = bizId
                             _currentUser.value = staffUser
+                            syncManager.ensureStaffLinked(bizId, uid, staffUser.phone, staffUser.name, role.name)
+                            syncManager.startProductsRealtimeListener()
                             triggerSync()
                             onResult(true, "স্বাগতম, ${staffUser.name}!", role)
                             return@launch
@@ -1511,6 +1558,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         val firestore = FirebaseFirestore.getInstance()
                         if (authUser != null) {
                             syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.ADMIN.name)
                         }
 
                         val expenseRef = firestore.collection("businesses")
@@ -1803,6 +1851,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
                     if (businessId.isNotBlank()) {
                         val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
+                        }
                         val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(submission, businessId)
                         firestore.collection("businesses")
                             .document(businessId)
@@ -1905,6 +1956,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
                     if (businessId.isNotBlank()) {
                         val firestore = FirebaseFirestore.getInstance()
+                        if (authUser != null) {
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
+                        }
                         val updatedFromDb = repository.getSubmissionById(submissionId) ?: dummyUpdated.copy(id = submissionId)
                         val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(updatedFromDb, businessId)
                         firestore.collection("businesses")
@@ -1959,6 +2013,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         val firestore = FirebaseFirestore.getInstance()
                         if (authUser != null) {
                             syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, admin.phone, admin.name, UserRole.ADMIN.name)
                         }
                         val updatedSub = repository.getSubmissionById(submissionId)
                         if (updatedSub != null) {
@@ -2020,6 +2075,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         val firestore = FirebaseFirestore.getInstance()
                         if (authUser != null) {
                             syncManager.ensureBusinessDocExists(businessId, authUser.uid)
+                            syncManager.ensureStaffLinked(businessId, authUser.uid, admin.phone, admin.name, UserRole.ADMIN.name)
                         }
                         val updatedSub = repository.getSubmissionById(submissionId)
                         if (updatedSub != null) {
