@@ -1065,7 +1065,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             try {
                 if (FirebaseApp.getApps(getApplication()).isNotEmpty() && FirebaseAuth.getInstance().currentUser != null) {
                     val firestore = FirebaseFirestore.getInstance()
-                    val memberDoc = withTimeoutOrNull(2500L) {
+                    val memberDoc = withTimeoutOrNull(8000L) {
                         firestore.collection("staff_memberships").document(uid).get().await()
                     }
                     if (memberDoc != null && memberDoc.exists()) {

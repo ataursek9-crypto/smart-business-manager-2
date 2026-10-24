@@ -36,15 +36,20 @@ import kotlinx.coroutines.tasks.await
 object GoogleSignInHelper {
     private const val TAG = "GoogleSignInHelper"
 
-    fun getWebClientId(context: Context): String? {
+    // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
+    const val APK_SIGNING_SHA1 = "E4:E7:2C:AB:E4:66:D0:C6:B9:A7:45:C3:10:FC:24:05:D1:35:52:6B"
+    const val APK_SIGNING_SHA256 = "69:77:65:77:1A:CC:B5:CE:24:F4:51:D9:5C:59:AF:E9:F7:D7:AC:7C:87:50:0A:35:21:7E:6A:27:1A:CB:73:43"
+    const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
+
+    fun getWebClientId(context: Context): String {
         return try {
             var resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
             if (resId == 0) {
                 resId = context.resources.getIdentifier("default_web_client_id", "string", "com.example")
             }
-            if (resId != 0) context.getString(resId) else "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
+            if (resId != 0) context.getString(resId) else DEFAULT_WEB_CLIENT_ID
         } catch (_: Exception) {
-            "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
+            DEFAULT_WEB_CLIENT_ID
         }
     }
 
@@ -61,7 +66,7 @@ object GoogleSignInHelper {
         }
 
         val clientId = getWebClientId(context)
-        if (clientId.isNullOrBlank()) {
+        if (clientId.isBlank()) {
             onError("গুগল সাইন-ইন কনফিগারেশন পাওয়া যায়নি (default_web_client_id অনুপস্থিত)।")
             return
         }
@@ -89,7 +94,7 @@ object GoogleSignInHelper {
                 }
             } catch (e: GetCredentialCancellationException) {
                 Log.w(TAG, "Google Sign-In cancelled: ${e.message}")
-                onError("গুগল সাইন-ইন সম্পন্ন হয়নি বা বাতিল হয়েছে। (আপনার Firebase Console-এ SHA-1: CC:86:91:7E:EB:9C:38:75:77:C4:90:E9:F3:19:AB:3D:B0:45:8E:67 যোগ করা নিশ্চিত করুন)")
+                onError("গুগল সাইন-ইন সম্পন্ন হয়নি বা বাতিল হয়েছে। (Firebase Console-এ আসল SHA-1: $APK_SIGNING_SHA1 যোগ করা নিশ্চিত করুন)")
             } catch (e: NoCredentialException) {
                 Log.w(TAG, "No credentials: ${e.message}")
                 onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে ডিভাইসে গুগল একাউন্ট যোগ করুন।")
@@ -97,13 +102,18 @@ object GoogleSignInHelper {
                 Log.e(TAG, "GetCredentialException: type=${e.type}, message=${e.message}", e)
                 val isDevError = e.message?.contains("10") == true || e.message?.contains("DEVELOPER_ERROR", ignoreCase = true) == true
                 if (isDevError) {
-                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10 / SHA-1 Mismatch)। অনুগ্রহ করে Firebase Console-এ APK-এর SHA-1 যোগ করুন।")
+                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10 / SHA-1 Mismatch)। অনুগ্রহ করে Firebase Console-এ APK-এর আসল SHA-1 যোগ করুন:\n$APK_SIGNING_SHA1")
                 } else {
                     onError("গুগল ক্রেডেনশিয়াল ত্রুটি: ${e.localizedMessage ?: e.message ?: "কনফিগারেশন পরীক্ষা করুন"}")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Authentication failed: ${e.message}", e)
-                onError("সাইন-ইন ব্যর্থ হয়েছে: ${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"}")
+                val msg = e.localizedMessage ?: e.message ?: ""
+                if (msg.contains("operation-not-allowed", ignoreCase = true) || msg.contains("disabled", ignoreCase = true)) {
+                    onError("Firebase Authentication-এ Google Sign-in provider সক্রিয় করা নেই। Firebase Console > Authentication > Sign-in method থেকে Google চালু করুন।")
+                } else {
+                    onError("সাইন-ইন ব্যর্থ হয়েছে: $msg")
+                }
             }
         }
     }
