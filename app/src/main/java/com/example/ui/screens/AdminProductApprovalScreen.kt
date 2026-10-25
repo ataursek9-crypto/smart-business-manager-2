@@ -43,6 +43,10 @@ fun AdminProductApprovalScreen(
     val context = LocalContext.current
     val allSubmissions by viewModel.allSubmissions.collectAsStateWithLifecycle()
 
+    val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
+    val submissionSyncInfo by viewModel.submissionSyncInfo.collectAsStateWithLifecycle()
+    val isFetchingSubmissions by viewModel.isFetchingSubmissions.collectAsStateWithLifecycle()
+
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("অপেক্ষমাণ", "অনুমোদিত", "সংশোধন প্রয়োজন")
 
@@ -67,7 +71,7 @@ fun AdminProductApprovalScreen(
     var submissionToReturn by remember { mutableStateOf<ProductSubmission?>(null) }
 
     LaunchedEffect(Unit) {
-        viewModel.fetchDirectProductSubmissions()
+        viewModel.fetchDirectProductSubmissions { _, _, _ -> }
         viewModel.syncManager.startProductsRealtimeListener()
         viewModel.triggerSync()
     }
@@ -84,7 +88,9 @@ fun AdminProductApprovalScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            viewModel.fetchDirectProductSubmissions()
+                            viewModel.fetchDirectProductSubmissions { success, msg, count ->
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
                             viewModel.triggerSync { _, msg ->
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }
@@ -108,6 +114,54 @@ fun AdminProductApprovalScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            // Cloud Status & Business ID Diagnostic Header
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(16.dp), tint = PrimaryBlue)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "বিজনেস আইডি: ${activeBizId.ifBlank { "অনুপস্থিত (গুগল সাইন-ইন প্রয়োজন)" }}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.fetchDirectProductSubmissions { _, msg, _ ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("ক্লাউড ফেচ", fontSize = 11.sp)
+                        }
+                    }
+                    if (!submissionSyncInfo.isNullOrBlank()) {
+                        Text(
+                            text = submissionSyncInfo!!,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            if (isFetchingSubmissions) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = PrimaryBlue)
+            }
+
             // Tab Row with badged counters
             PrimaryTabRow(
                 selectedTabIndex = selectedTabIndex,
@@ -156,6 +210,18 @@ fun AdminProductApprovalScreen(
                             color = Color.Gray,
                             fontSize = 14.sp
                         )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.fetchDirectProductSubmissions { _, msg, _ ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("সার্ভার থেকে সরাসরি রিফ্রেশ করুন", fontSize = 12.sp)
+                        }
                     }
                 }
             } else {
@@ -322,7 +388,8 @@ fun AdminSubmissionCard(
                     Text("সম্ভাব্য লাভ: ${BengaliFormatter.formatCurrency(margin)}", fontSize = 11.sp, color = Color(0xFF2E7D32))
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("প্রাথমিক স্টক: ${submission.initialStock} ${submission.unit}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("প্রস্তাবিত স্টক: ${submission.initialStock} ${submission.unit}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("(অনুমোদনের পর মূল স্টকে যোগ হবে)", fontSize = 10.sp, color = Color(0xFFE65100))
                     Text("জমা: ${BengaliFormatter.formatDate(submission.createdAt)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
                 }
             }

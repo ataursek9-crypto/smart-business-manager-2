@@ -41,7 +41,7 @@ class CloudSyncManager(
             val clean = email.trim().lowercase()
             return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
                    clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
-                   clean == "ataulgonee786@gmail.com"
+                   clean == "ataulgonee786@gmail.com" || clean == "ataurpos@gmail.com"
         }
 
         /**
@@ -461,7 +461,9 @@ class CloudSyncManager(
                 if (authUser.uid.isBlank()) return@launch
 
                 val businessId = try { resolveBusinessId() } catch (_: Exception) {
-                    try { resolveOrFetchBusinessId() } catch (_: Exception) { return@launch }
+                    try { resolveOrFetchBusinessId() } catch (_: Exception) {
+                        CloudBusinessAuth.getStoredBusinessId(context) ?: return@launch
+                    }
                 }
                 if (businessId.isBlank()) return@launch
 
@@ -618,31 +620,59 @@ class CloudSyncManager(
         }
     }
 
-    suspend fun fetchDirectProductSubmissions(businessId: String? = null) {
-        if (!isCloudBackendConfigured()) return
-        val bizId = businessId ?: try { resolveOrFetchBusinessId() } catch (_: Exception) { return }
-        if (bizId.isBlank()) return
-        try {
+    suspend fun fetchDirectProductSubmissions(businessId: String? = null): Int {
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            Log.w(TAG, "[fetchDirectProductSubmissions] FirebaseApp is not initialized.")
+            return 0
+        }
+        val bizId = businessId?.trim()?.ifBlank { null } ?: try { resolveOrFetchBusinessId() } catch (e: Exception) {
+            CloudBusinessAuth.getStoredBusinessId(context) ?: ""
+        }
+        if (bizId.isBlank()) {
+            Log.w(TAG, "[fetchDirectProductSubmissions] Active businessId is empty, skipping direct fetch.")
+            return 0
+        }
+        val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        val authUid = authUser?.uid ?: "unauthenticated"
+        val queryPath = "/businesses/$bizId/product_submissions"
+        Log.i(TAG, "[fetchDirectProductSubmissions] Querying Firestore path: $queryPath (AuthUid: $authUid, Email: ${authUser?.email})")
+
+        return try {
             val firestore = FirebaseFirestore.getInstance()
             val collection = firestore.collection("businesses").document(bizId).collection("product_submissions")
-            val snapshot = collection.get().awaitResult()
-            Log.i(TAG, "[fetchDirectProductSubmissions] Direct fetch returned ${snapshot.size()} docs from /businesses/$bizId/product_submissions")
-            for (doc in snapshot.documents) {
+            val snapshot = try {
+                collection.get(com.google.firebase.firestore.Source.SERVER).awaitResult()
+            } catch (e: Exception) {
+                Log.w(TAG, "[fetchDirectProductSubmissions] Server fetch fallback: ${e.message}")
+                collection.get().awaitResult()
+            }
+            val docs = snapshot.documents
+            Log.i(TAG, "[fetchDirectProductSubmissions] Direct fetch returned ${docs.size} docs from $queryPath")
+            for (doc in docs) {
                 applyRemoteSubmissionDoc(doc)
             }
+            docs.size
         } catch (e: Exception) {
-            Log.e(TAG, "[fetchDirectProductSubmissions] Direct fetch failed: ${e.message}", e)
+            Log.e(TAG, "[fetchDirectProductSubmissions] Direct fetch failed at $queryPath: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun fetchDirectExpenses(businessId: String? = null) {
-        if (!isCloudBackendConfigured()) return
-        val bizId = businessId ?: try { resolveOrFetchBusinessId() } catch (_: Exception) { return }
+        if (FirebaseApp.getApps(context).isEmpty()) return
+        val bizId = businessId?.trim()?.ifBlank { null } ?: try { resolveOrFetchBusinessId() } catch (_: Exception) {
+            CloudBusinessAuth.getStoredBusinessId(context) ?: ""
+        }
         if (bizId.isBlank()) return
         try {
             val firestore = FirebaseFirestore.getInstance()
             val collection = firestore.collection("businesses").document(bizId).collection("expenses")
-            val snapshot = collection.get().awaitResult()
+            val snapshot = try {
+                collection.get(com.google.firebase.firestore.Source.SERVER).awaitResult()
+            } catch (e: Exception) {
+                Log.w(TAG, "[fetchDirectExpenses] Server fetch fallback: ${e.message}")
+                collection.get().awaitResult()
+            }
             Log.i(TAG, "[fetchDirectExpenses] Direct fetch returned ${snapshot.size()} docs from /businesses/$bizId/expenses")
             for (doc in snapshot.documents) {
                 applyRemoteExpenseDoc(doc)
@@ -1452,51 +1482,60 @@ class CloudSyncManager(
 
         val remoteSubmissionsById = remoteSubmissionDocs.associateBy { it.id }
 
-        // 2. If admin: upload local approvals, notes, and revisions
-        if (!isSalesman) {
-            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-            for (sub in localSubmissions) {
-                // Admin NEVER uploads an unreviewed PENDING submission
-                if (sub.status == ProductSubmissionStatus.PENDING) {
-                    continue
-                }
-                val remoteDoc = remoteSubmissionsById[sub.id]
-                val remoteStatusStr = remoteDoc?.getString("status")
-                val remoteUpdatedAt = remoteDoc?.getLong("updatedAt") ?: 0L
-                val shouldUpload = remoteDoc == null ||
-                        remoteStatusStr != sub.status.name ||
-                        remoteUpdatedAt < sub.updatedAt
+        // 2. Synchronize local submissions with Firestore
+        val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
+        for (sub in localSubmissions) {
+            val remoteDoc = remoteSubmissionsById[sub.id]
+            val remoteStatusStr = remoteDoc?.getString("status")
+            val remoteUpdatedAt = remoteDoc?.getLong("updatedAt") ?: 0L
 
-                if (shouldUpload) {
-                    try {
-                        val data = mapProductSubmissionToCloud(sub, businessId)
-                        collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
-                        Log.i(TAG, "[syncProductSubmissions] Admin uploaded authoritative review for submission ${sub.id}: status=${sub.status}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "[syncProductSubmissions] Admin upload failed for submission ${sub.id}: ${e.message}", e)
+            when (sub.status) {
+                ProductSubmissionStatus.PENDING -> {
+                    // Rule: Any device holding a PENDING submission that is not yet in cloud,
+                    // or locally updated, must upload it so Admin can review it.
+                    val shouldUpload = remoteDoc == null ||
+                            (remoteStatusStr == ProductSubmissionStatus.PENDING.name && sub.updatedAt > remoteUpdatedAt)
+                    if (shouldUpload) {
+                        try {
+                            val data = mapProductSubmissionToCloud(sub, businessId)
+                            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                            Log.i(TAG, "[syncProductSubmissions] Uploaded pending submission '${sub.name}' (${sub.id}) to /businesses/$businessId/product_submissions")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[syncProductSubmissions] Upload failed for pending submission '${sub.name}' (${sub.id}): ${e.message}", e)
+                        }
                     }
                 }
-            }
-        }
-
-        // 3. If salesman: upload local pending or needs_correction resubmissions
-        if (isSalesman) {
-            val localSubmissions = db.productSubmissionDao().getSyncSubmissions()
-            for (sub in localSubmissions) {
-                if (sub.status == ProductSubmissionStatus.APPROVED) {
-                    continue
+                ProductSubmissionStatus.APPROVED -> {
+                    // Admin authoritative approval upload
+                    if (!isSalesman) {
+                        val shouldUpload = remoteDoc == null ||
+                                remoteStatusStr != sub.status.name ||
+                                remoteUpdatedAt < sub.updatedAt
+                        if (shouldUpload) {
+                            try {
+                                val data = mapProductSubmissionToCloud(sub, businessId)
+                                collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                                Log.i(TAG, "[syncProductSubmissions] Admin uploaded authoritative approval for submission ${sub.id}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "[syncProductSubmissions] Admin approval upload failed for ${sub.id}: ${e.message}", e)
+                            }
+                        }
+                    }
                 }
-                val remoteDoc = remoteSubmissionsById[sub.id]
-                // If it already exists in Firestore as PENDING, don't continuously re-upload it
-                if (remoteDoc != null && sub.status == ProductSubmissionStatus.PENDING) {
-                    continue
-                }
-                try {
-                    val data = mapProductSubmissionToCloud(sub, businessId)
-                    collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
-                    Log.i(TAG, "[syncProductSubmissions] Salesman uploaded submission ${sub.name} (${sub.id}) to /businesses/$businessId/product_submissions")
-                } catch (e: Exception) {
-                    Log.e(TAG, "[syncProductSubmissions] Salesman upload failed for submission ${sub.id}: ${e.message}", e)
+                ProductSubmissionStatus.NEEDS_CORRECTION -> {
+                    // Either admin returned it for correction, or salesman uploaded revised item
+                    val shouldUpload = remoteDoc == null ||
+                            remoteStatusStr != sub.status.name ||
+                            remoteUpdatedAt < sub.updatedAt
+                    if (shouldUpload) {
+                        try {
+                            val data = mapProductSubmissionToCloud(sub, businessId)
+                            collection.document(sub.id).set(data, SetOptions.merge()).awaitResult()
+                            Log.i(TAG, "[syncProductSubmissions] Uploaded correction state for submission ${sub.id}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[syncProductSubmissions] Correction state upload failed for ${sub.id}: ${e.message}", e)
+                        }
+                    }
                 }
             }
         }
@@ -1571,11 +1610,19 @@ class CloudSyncManager(
                 return
             }
 
-            // Update if status, admin notes, review data, or updatedAt changed remotely
+            // Update if status, admin notes, review data, product fields, or updatedAt changed remotely
             if (existing.status != status ||
                 existing.adminCorrectionNote != adminCorrectionNote ||
                 existing.approvedProductId != approvedProductId ||
                 existing.reviewedAt != reviewedAt ||
+                existing.purchasePrice != purchasePrice ||
+                existing.sellingPrice != sellingPrice ||
+                existing.initialStock != initialStock ||
+                existing.name != name ||
+                existing.productCode != productCode ||
+                existing.category != category ||
+                existing.unit != unit ||
+                existing.description != description ||
                 existing.updatedAt < updatedAt) {
                 val updatedSub = existing.copy(
                     name = name,

@@ -37,9 +37,61 @@ object GoogleSignInHelper {
     private const val TAG = "GoogleSignInHelper"
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
-    const val APK_SIGNING_SHA1 = "E4:E7:2C:AB:E4:66:D0:C6:B9:A7:45:C3:10:FC:24:05:D1:35:52:6B"
-    const val APK_SIGNING_SHA256 = "69:77:65:77:1A:CC:B5:CE:24:F4:51:D9:5C:59:AF:E9:F7:D7:AC:7C:87:50:0A:35:21:7E:6A:27:1A:CB:73:43"
+    // Verified using: apksigner verify --print-certs app-debug.apk and keytool -list -v -keystore debug.keystore
+    const val APK_SIGNING_SHA1 = "EC:9F:34:AD:BE:82:56:47:5C:CC:96:62:B2:19:02:1E:99:A2:00:19"
+    const val APK_SIGNING_SHA256 = "15:78:6F:B9:73:B6:5F:42:EC:2B:2D:88:40:10:6A:03:7A:C5:F9:8A:A0:98:B5:B2:E6:EC:F5:92:3C:BB:2F:90"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
+    const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
+
+    @Suppress("DEPRECATION")
+    fun getSigningSha1(context: Context): String {
+        return try {
+            val signatures = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                val packageInfo = context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+                )
+                packageInfo.signingInfo?.apkContentsSigners
+            } else {
+                val packageInfo = context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.GET_SIGNATURES
+                )
+                packageInfo.signatures
+            }
+            val cert = signatures?.firstOrNull()?.toByteArray() ?: return APK_SIGNING_SHA1
+            val md = java.security.MessageDigest.getInstance("SHA-1")
+            val digest = md.digest(cert)
+            digest.joinToString(":") { "%02X".format(it) }
+        } catch (_: Exception) {
+            APK_SIGNING_SHA1
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    fun getSigningSha256(context: Context): String {
+        return try {
+            val signatures = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                val packageInfo = context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+                )
+                packageInfo.signingInfo?.apkContentsSigners
+            } else {
+                val packageInfo = context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.GET_SIGNATURES
+                )
+                packageInfo.signatures
+            }
+            val cert = signatures?.firstOrNull()?.toByteArray() ?: return APK_SIGNING_SHA256
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(cert)
+            digest.joinToString(":") { "%02X".format(it) }
+        } catch (_: Exception) {
+            APK_SIGNING_SHA256
+        }
+    }
 
     fun getWebClientId(context: Context): String {
         return try {
@@ -71,6 +123,10 @@ object GoogleSignInHelper {
             return
         }
 
+        val currentSha1 = getSigningSha1(context)
+        val currentSha256 = getSigningSha256(context)
+        Log.i(TAG, "Initiating Google Sign-In with serverClientId=$clientId, package=${context.packageName}, sha1=$currentSha1")
+
         val credentialManager = CredentialManager.create(context)
         val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
         val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
@@ -81,38 +137,68 @@ object GoogleSignInHelper {
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                    Log.i(TAG, "Google ID Token received successfully")
                     val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
                     val authResult = FirebaseAuth.getInstance().signInWithCredential(authCredential).await()
                     val user = authResult.user
                     if (user != null) {
+                        Log.i(TAG, "FirebaseAuth sign-in success: uid=${user.uid}, email=${user.email}")
                         onAuthSuccess(user)
                     } else {
-                        onError("ফায়ারবেস ব্যবহারকারী সেশন শুরু করা সম্ভব হয়নি।")
+                        onError("ফায়ারবেস ব্যবহারকারী সেশন শুরু করা সম্ভব হয়নি। (AuthResult returned null user)")
                     }
                 } else {
-                    onError("অপ্রত্যাশিত ক্রেডেনশিয়াল ফরম্যাট পাওয়া গেছে।")
+                    val unexpectedType = credential::class.java.name
+                    Log.e(TAG, "Unexpected credential type: $unexpectedType, type=${credential.type}")
+                    onError("অপ্রত্যাশিত ক্রেডেনশিয়াল ফরম্যাট: $unexpectedType (type: ${credential.type})")
                 }
             } catch (e: GetCredentialCancellationException) {
-                Log.w(TAG, "Google Sign-In cancelled: ${e.message}")
-                onError("গুগল সাইন-ইন সম্পন্ন হয়নি বা বাতিল হয়েছে। (Firebase Console-এ আসল SHA-1: $APK_SIGNING_SHA1 যোগ করা নিশ্চিত করুন)")
+                val exMsg = e.message ?: "Operation was canceled"
+                Log.w(TAG, "GetCredentialCancellationException: $exMsg", e)
+                onError("গুগল সাইন-ইন উইন্ডো বন্ধ বা বাতিল হয়েছে।\n" +
+                        "ত্রুটি বিবরণ: [${e.javaClass.simpleName}] $exMsg\n\n" +
+                        "লক্ষণীয়: সাইন-ইন ডায়ালগ না এসে সাথে সাথে বন্ধ হলে Firebase Console-এ SHA-1 বা Package Mismatch রয়েছে।\n" +
+                        "আসল প্যাকেজ: ${context.packageName}\n" +
+                        "আসল SHA-1: $currentSha1")
             } catch (e: NoCredentialException) {
-                Log.w(TAG, "No credentials: ${e.message}")
-                onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে ডিভাইসে গুগল একাউন্ট যোগ করুন।")
+                val exMsg = e.message ?: "No account credentials"
+                Log.w(TAG, "NoCredentialException: $exMsg", e)
+                onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি।\nত্রুটি বিবরণ: $exMsg\nঅনুগ্রহ করে ফোনের Settings > Accounts-এ গুগল অ্যাকাউন্ট যোগ করুন।")
             } catch (e: GetCredentialException) {
-                Log.e(TAG, "GetCredentialException: type=${e.type}, message=${e.message}", e)
-                val isDevError = e.message?.contains("10") == true || e.message?.contains("DEVELOPER_ERROR", ignoreCase = true) == true
-                if (isDevError) {
-                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10 / SHA-1 Mismatch)। অনুগ্রহ করে Firebase Console-এ APK-এর আসল SHA-1 যোগ করুন:\n$APK_SIGNING_SHA1")
-                } else {
-                    onError("গুগল ক্রেডেনশিয়াল ত্রুটি: ${e.localizedMessage ?: e.message ?: "কনফিগারেশন পরীক্ষা করুন"}")
+                val exType = e.type
+                val exMsg = e.message ?: ""
+                val exCause = e.cause?.toString() ?: "None"
+                Log.e(TAG, "GetCredentialException: type=$exType, message=$exMsg, cause=$exCause", e)
+                val isDevError = exMsg.contains("10") || exMsg.contains("DEVELOPER_ERROR", ignoreCase = true) || exType.contains("DEVELOPER_ERROR", ignoreCase = true)
+                val isCanceled = exMsg.contains("16") || exMsg.contains("CANCELLED", ignoreCase = true)
+                val summary = when {
+                    isDevError -> "Developer Error (Code 10: SHA-1 / Package Mismatch)"
+                    isCanceled -> "Operation Canceled (Code 16 / OAuth Client Not Found)"
+                    else -> "Credential Manager Exception ($exType)"
                 }
+                onError("গুগল সাইন-ইন ব্যর্থ হয়েছে: $summary\n" +
+                        "প্রকৃত বার্তা: $exMsg\n" +
+                        "Type: $exType\n" +
+                        "Cause: $exCause\n\n" +
+                        "Firebase Console-এ প্রয়োজনীয় কনফিগারেশন:\n" +
+                        "• Package Name: ${context.packageName}\n" +
+                        "• আসল SHA-1: $currentSha1\n" +
+                        "• আসল SHA-256: $currentSha256\n" +
+                        "• Web Client ID: $clientId")
             } catch (e: Exception) {
-                Log.e(TAG, "Authentication failed: ${e.message}", e)
-                val msg = e.localizedMessage ?: e.message ?: ""
-                if (msg.contains("operation-not-allowed", ignoreCase = true) || msg.contains("disabled", ignoreCase = true)) {
-                    onError("Firebase Authentication-এ Google Sign-in provider সক্রিয় করা নেই। Firebase Console > Authentication > Sign-in method থেকে Google চালু করুন।")
+                val exClass = e.javaClass.simpleName
+                val exMsg = e.localizedMessage ?: e.message ?: "Unknown"
+                val exCause = e.cause?.toString() ?: "None"
+                Log.e(TAG, "General Authentication Exception: $exClass: $exMsg, cause=$exCause", e)
+                if (exMsg.contains("operation-not-allowed", ignoreCase = true) || exMsg.contains("disabled", ignoreCase = true)) {
+                    onError("Firebase Authentication-এ Google Sign-in সক্রিয় করা নেই!\n" +
+                            "Firebase Console > Authentication > Sign-in method-এ যান, Google চালু করুন এবং Support Email নির্বাচন করে সংরক্ষণ করুন।\n" +
+                            "বিস্তারিত: [$exClass] $exMsg")
                 } else {
-                    onError("সাইন-ইন ব্যর্থ হয়েছে: $msg")
+                    onError("সাইন-ইন ব্যর্থ হয়েছে: [$exClass]\n" +
+                            "বার্তা: $exMsg\n" +
+                            "Cause: $exCause\n\n" +
+                            "ডিভাইস তথ্য: Package=${context.packageName}, SHA-1=$currentSha1")
                 }
             }
         }

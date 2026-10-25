@@ -38,6 +38,10 @@ fun SalesmanSubmittedProductsScreen(
     val mySubmissions by viewModel.mySubmissions.collectAsStateWithLifecycle()
     var selectedFilter by remember { mutableStateOf<ProductSubmissionStatus?>(null) }
 
+    val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
+    val syncInfo by viewModel.submissionSyncInfo.collectAsStateWithLifecycle()
+    val isFetching by viewModel.isFetchingSubmissions.collectAsStateWithLifecycle()
+
     LaunchedEffect(Unit) {
         viewModel.fetchDirectProductSubmissions()
         viewModel.syncManager.startProductsRealtimeListener()
@@ -101,6 +105,50 @@ fun SalesmanSubmittedProductsScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            // Diagnostic business & cloud sync status banner
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "বিজনেস আইডি: ${activeBizId.ifBlank { "অনুপস্থিত (গুগল সাইন-ইন প্রয়োজন)" }}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        if (syncInfo != null) {
+                            Text(
+                                text = syncInfo ?: "",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = {
+                            viewModel.fetchDirectProductSubmissions { ok, msg, count ->
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        if (isFetching) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.CloudSync, contentDescription = "সার্ভার সিঙ্ক", tint = PrimaryNavy, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+
             // Status Filter Chips
             Row(
                 modifier = Modifier
@@ -247,7 +295,8 @@ fun SalesmanSubmissionCard(
                     Text("বিক্রয়মূল্য: ${BengaliFormatter.formatCurrency(submission.sellingPrice)}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("প্রাথমিক স্টক: ${submission.initialStock} ${submission.unit}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PrimaryBlue)
+                    Text("প্রস্তাবিত স্টক: ${submission.initialStock} ${submission.unit}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PrimaryBlue)
+                    Text("(অনুমোদনের পর যোগ হবে)", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
                     Text("জমা: ${BengaliFormatter.formatDate(submission.createdAt)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
                 }
             }

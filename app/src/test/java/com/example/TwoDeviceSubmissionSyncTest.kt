@@ -566,4 +566,135 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals("Admin expense must remain permanently APPROVED", ExpenseStatus.APPROVED, finalAdminExpense?.status)
         assertEquals("অনুমোদিত", finalAdminExpense?.adminNote)
     }
+
+    // 12. Cross-Device Specific Test: "থ্রি পিস" (SKU P006, ৳850, ৳1445, 150 সেট) submission from Salesman phone to Admin phone
+    @Test
+    fun testTwoDeviceThreePieceP006ProductSubmissionAndApproval() = runTest(testDispatcher) {
+        val sharedBizId = "biz_shared_apparel_3piece"
+        val submissionId = "sub_p006_three_piece"
+
+        val adminUser = User(
+            id = adminId,
+            name = "অ্যাডমিন আতাউর",
+            phone = "01700000000",
+            role = UserRole.ADMIN,
+            pinHash = "pin_hash_1",
+            isActive = true
+        )
+        adminDb.userDao().insertUser(adminUser)
+
+        val salesmanUser = User(
+            id = salesmanId,
+            name = "সেলসম্যান রফিক",
+            phone = "01800000000",
+            role = UserRole.SALESMAN,
+            pinHash = "pin_hash_2",
+            isActive = true
+        )
+        salesmanDb.userDao().insertUser(salesmanUser)
+
+        val adminRepo = com.example.data.repository.BusinessRepository(adminDb)
+
+        // 1. Salesman submits "থ্রি পিস" (SKU P006, ৳850 purchase, ৳1445 selling, 150 সেট stock) on Salesman phone
+        val salesmanSubmission = ProductSubmission(
+            id = submissionId,
+            name = "থ্রি পিস",
+            productCode = "P006",
+            category = "মহিলাদের পোশাক",
+            purchasePrice = 850.0,
+            sellingPrice = 1445.0,
+            initialStock = 150.0,
+            unit = "সেট",
+            description = "সুতি প্রিন্টেড থ্রি পিস",
+            salesmanId = salesmanId,
+            salesmanName = "সেলসম্যান রফিক",
+            salesmanPhone = "01800000000",
+            status = ProductSubmissionStatus.PENDING,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+
+        // Saved locally on Salesman phone
+        salesmanDb.productSubmissionDao().insertSubmission(salesmanSubmission)
+        val salesmanLocalSub = salesmanDb.productSubmissionDao().getSubmissionById(submissionId)
+        assertNotNull(salesmanLocalSub)
+        assertEquals(ProductSubmissionStatus.PENDING, salesmanLocalSub?.status)
+
+        // 2. Maps to shared business ID in Cloud
+        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(salesmanSubmission, sharedBizId)
+        assertEquals(sharedBizId, cloudMap["businessId"])
+        assertEquals("PENDING", cloudMap["status"])
+        assertEquals("থ্রি পিস", cloudMap["name"])
+        assertEquals("P006", cloudMap["productCode"])
+        assertEquals(850.0, cloudMap["purchasePrice"])
+        assertEquals(1445.0, cloudMap["sellingPrice"])
+        assertEquals(150.0, cloudMap["initialStock"])
+        assertEquals("সেট", cloudMap["unit"])
+
+        // 3. Admin phone receives cloud data via applyRemoteSubmissionMap
+        assertNull("Before sync, Admin phone has no submission", adminDb.productSubmissionDao().getSubmissionById(submissionId))
+        adminSyncManager.applyRemoteSubmissionMap(cloudMap)
+
+        // Admin phone now has the pending submission
+        val adminPendingSub = adminDb.productSubmissionDao().getSubmissionById(submissionId)
+        assertNotNull("Admin phone must receive the pending submission from cloud", adminPendingSub)
+        assertEquals(ProductSubmissionStatus.PENDING, adminPendingSub?.status)
+        assertEquals("থ্রি পিস", adminPendingSub?.name)
+        assertEquals("P006", adminPendingSub?.productCode)
+        assertEquals(850.0, adminPendingSub?.purchasePrice ?: 0.0, 0.001)
+        assertEquals(1445.0, adminPendingSub?.sellingPrice ?: 0.0, 0.001)
+        assertEquals(150.0, adminPendingSub?.initialStock ?: 0.0, 0.001)
+        assertEquals("সেট", adminPendingSub?.unit)
+
+        // Verify pending count on Admin device
+        val pendingCount = adminDb.productSubmissionDao().getSyncSubmissions().count { it.status == ProductSubmissionStatus.PENDING }
+        assertEquals(1, pendingCount)
+
+        // 4. Verify product is NOT in Admin main inventory before approval
+        val allAdminProductsBefore = adminDb.productDao().getAllProductsList()
+        assertFalse("Product must NOT exist in main inventory before Admin approval", allAdminProductsBefore.any { it.sku == "P006" || it.name == "থ্রি পিস" })
+
+        // 5. Admin approves the submission
+        val approvedProduct = adminRepo.approveProductSubmission(
+            submissionId = submissionId,
+            finalData = adminPendingSub!!,
+            adminUser = adminUser
+        )
+        assertNotNull(approvedProduct)
+        assertEquals("থ্রি পিস", approvedProduct.name)
+        assertEquals("P006", approvedProduct.sku)
+        assertEquals(150.0, approvedProduct.currentStock, 0.001)
+        assertEquals(850.0, approvedProduct.purchasePrice, 0.001)
+        assertEquals(1445.0, approvedProduct.sellingPrice, 0.001)
+
+        // 6. Verify product is in Admin inventory exactly once
+        val allAdminProductsAfter = adminDb.productDao().getAllProductsList()
+        val matchingProducts = allAdminProductsAfter.filter { it.sku == "P006" }
+        assertEquals("Product must exist exactly once in Admin inventory", 1, matchingProducts.size)
+
+        // 7. Verify submission status is now APPROVED on Admin device
+        val adminApprovedSub = adminDb.productSubmissionDao().getSubmissionById(submissionId)
+        assertEquals(ProductSubmissionStatus.APPROVED, adminApprovedSub?.status)
+        assertEquals(approvedProduct.id, adminApprovedSub?.approvedProductId)
+
+        // 8. Sync approval decisions to Salesman device via Cloud mapping
+        val cloudApprovedSubMap = CloudSyncManager.mapProductSubmissionToCloud(adminApprovedSub!!, sharedBizId)
+        val cloudApprovedProdMap = CloudSyncManager.mapProductToCloud(approvedProduct, sharedBizId, isSalesman = false)
+
+        salesmanSyncManager.applyRemoteSubmissionMap(cloudApprovedSubMap)
+        salesmanSyncManager.applyRemoteProductMap(cloudApprovedProdMap, isSalesman = true)
+
+        // 9. Verify Salesman phone now reflects APPROVED status and received the product
+        val salesmanFinalSub = salesmanDb.productSubmissionDao().getSubmissionById(submissionId)
+        assertEquals(ProductSubmissionStatus.APPROVED, salesmanFinalSub?.status)
+        assertEquals(approvedProduct.id, salesmanFinalSub?.approvedProductId)
+
+        val salesmanFinalProduct = salesmanDb.productDao().getProductById(approvedProduct.id)
+        assertNotNull("Salesman must have the approved product in stock", salesmanFinalProduct)
+        assertEquals("থ্রি পিস", salesmanFinalProduct?.name)
+        assertEquals("P006", salesmanFinalProduct?.sku)
+        assertEquals(150.0, salesmanFinalProduct?.currentStock ?: 0.0, 0.001)
+        assertEquals(1445.0, salesmanFinalProduct?.sellingPrice ?: 0.0, 0.001)
+        assertEquals("Purchase price must remain confidential (0.0) for salesman", 0.0, salesmanFinalProduct?.purchasePrice ?: 0.0, 0.001)
+    }
 }
