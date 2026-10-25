@@ -46,6 +46,7 @@ fun AdminLoginScreen(
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var isGoogleLoading by remember { mutableStateOf(false) }
+    var showGoogleDiagDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -296,10 +297,28 @@ fun AdminLoginScreen(
                             )
                         }
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    TextButton(
+                        onClick = { showGoogleDiagDialog = true },
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .testTag("admin_google_signin_diagnostic_button")
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Google Sign-In কি ও কনফিগারেশন দেখুন", fontSize = 12.sp, color = PrimaryNavy)
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(28.dp))
         }
+    }
+
+    if (showGoogleDiagDialog) {
+        com.example.util.GoogleSignInDiagnosticDialog(
+            onDismiss = { showGoogleDiagDialog = false }
+        )
     }
 }

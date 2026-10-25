@@ -42,7 +42,7 @@ class CloudSyncManager(
             return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
                    clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
                    clean == "ataulgonee786@gmail.com" || clean == "ataurpos@gmail.com" ||
-                   clean == "ataur50305@gmail.com"
+                   clean == "ataur50305@gmail.com" || clean == "a48268993@gmail.com"
         }
 
         /**
@@ -638,6 +638,20 @@ class CloudSyncManager(
         val queryPath = "/businesses/$bizId/product_submissions"
         Log.i(TAG, "[fetchDirectProductSubmissions] Querying Firestore path: $queryPath (AuthUid: $authUid, Email: ${authUser?.email})")
 
+        if (authUser == null || authUid.isBlank() || authUid == "unauthenticated") {
+            val unauthMsg = "Firebase Authentication প্রয়োজন: আপনি ক্লাউডে সাইন-ইন করেননি। ক্লাউড থেকে আবেদন লোড করার জন্য Google Sign-In আবশ্যক। (Path: $queryPath, Business ID: $bizId)"
+            Log.e(TAG, "[fetchDirectProductSubmissions] Aborted: $unauthMsg")
+            throw IllegalStateException(unauthMsg)
+        }
+
+        // Proactively link business document and staff membership so Firestore security rules permit reading
+        try {
+            ensureBusinessDocExists(bizId, authUid)
+            ensureStaffLinked(bizId, authUid, role = UserRole.ADMIN.name, name = authUser.displayName ?: "অ্যাডমিন")
+        } catch (linkEx: Exception) {
+            Log.w(TAG, "[fetchDirectProductSubmissions] Pre-fetch staff linking warning: ${linkEx.message}")
+        }
+
         return try {
             val firestore = FirebaseFirestore.getInstance()
             val collection = firestore.collection("businesses").document(bizId).collection("product_submissions")
@@ -654,8 +668,13 @@ class CloudSyncManager(
             }
             docs.size
         } catch (e: Exception) {
-            Log.e(TAG, "[fetchDirectProductSubmissions] Direct fetch failed at $queryPath: ${e.message}", e)
-            throw e
+            Log.e(TAG, "[fetchDirectProductSubmissions] Direct fetch failed at $queryPath | BusinessId: $bizId | AuthUid: $authUid | Email: ${authUser.email} | Error: ${e.message}", e)
+            val errMsg = if (e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                "অনুমতি ত্রুটি (PERMISSION_DENIED): এই বিজনেস আইডির ($bizId) প্রোডাক্ট আবেদন পড়ার অনুমতি নেই। UID: $authUid, Email: ${authUser.email}। অনুগ্রহ করে নিশ্চিত করুন আপনি সঠিক অ্যাডমিন অ্যাকাউন্টে লগইন করেছেন।"
+            } else {
+                e.localizedMessage ?: e.message ?: "ক্লাউড থেকে আবেদন লোড ব্যর্থ হয়েছে"
+            }
+            throw Exception(errMsg, e)
         }
     }
 

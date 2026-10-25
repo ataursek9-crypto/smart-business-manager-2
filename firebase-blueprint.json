@@ -113,12 +113,38 @@
         "businessId": { "type": "string", "description": "Scoped business identifier" }
       },
       "required": ["id", "tableName", "originalId", "businessId"]
+    },
+    "ProductSubmission": {
+      "title": "ProductSubmission",
+      "description": "Salesman submitted product proposal awaiting admin verification and approval",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique submission ID" },
+        "name": { "type": "string", "description": "Product candidate name" },
+        "productCode": { "type": "string", "description": "Product code / SKU" },
+        "category": { "type": "string", "description": "Product category" },
+        "purchasePrice": { "type": "number", "description": "Cost price" },
+        "sellingPrice": { "type": "number", "description": "Selling price" },
+        "initialStock": { "type": "number", "description": "Proposed initial stock" },
+        "unit": { "type": "string", "description": "Measurement unit" },
+        "description": { "type": "string", "description": "Product description" },
+        "salesmanId": { "type": "string", "description": "Submitter staff UID" },
+        "salesmanName": { "type": "string", "description": "Submitter staff name" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "NEEDS_CORRECTION", "REJECTED"], "description": "Approval status" },
+        "adminCorrectionNote": { "type": "string", "description": "Admin review note for correction" },
+        "businessId": { "type": "string", "description": "Scoped business identifier" }
+      },
+      "required": ["id", "name", "sellingPrice", "initialStock", "status", "businessId"]
     }
   },
   "firestore": {
     "/businesses/{businessId}/products/{productId}": {
       "schema": { "$ref": "#/entities/Product" },
       "description": "Scoped business products and stock balances"
+    },
+    "/businesses/{businessId}/product_submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/ProductSubmission" },
+      "description": "Scoped product submission proposals awaiting admin approval"
     },
     "/businesses/{businessId}/customers/{customerId}": {
       "schema": { "$ref": "#/entities/Customer" },

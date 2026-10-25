@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.firebase.auth.FirebaseAuth
 import com.example.data.model.ProductSubmission
 import com.example.data.model.ProductSubmissionStatus
 import com.example.ui.components.ProductThumbnail
@@ -46,6 +47,8 @@ fun AdminProductApprovalScreen(
     val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
     val submissionSyncInfo by viewModel.submissionSyncInfo.collectAsStateWithLifecycle()
     val isFetchingSubmissions by viewModel.isFetchingSubmissions.collectAsStateWithLifecycle()
+    val submissionFetchError by viewModel.submissionFetchError.collectAsStateWithLifecycle()
+    val isFetchSuccessful by viewModel.isSubmissionsFetchSuccessful.collectAsStateWithLifecycle()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("অপেক্ষমাণ", "অনুমোদিত", "সংশোধন প্রয়োজন")
@@ -194,35 +197,137 @@ fun AdminProductApprovalScreen(
             }
 
             if (currentList.isEmpty()) {
+                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
+                        .padding(20.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.CheckCircleOutline, contentDescription = null, modifier = Modifier.size(56.dp), tint = Color.Gray)
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = when (selectedTabIndex) {
-                                0 -> "বর্তমানে কোনো অপেক্ষমাণ প্রোডাক্ট সাবমিশন নেই"
-                                1 -> "এখনও কোনো প্রোডাক্ট অনুমোদন করা হয়নি"
-                                else -> "সংশোধনের জন্য ফেরত পাঠানো কোনো প্রোডাক্ট নেই"
-                            },
-                            color = Color.Gray,
-                            fontSize = 14.sp
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.fetchDirectProductSubmissions { _, msg, _ ->
-                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    if (selectedTabIndex == 0 && submissionFetchError != null) {
+                        // EXPLICIT ERROR CARD (Rule: Never pretend pending 0 when server fetch failed)
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "ক্লাউড থেকে আবেদন লোড ব্যর্থ হয়েছে",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = submissionFetchError ?: "অজ্ঞাত ত্রুটি",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text(
+                                            text = "যাচাই ও ডায়াগনস্টিক তথ্য:",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = PrimaryNavy
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "• কালেকশন পাথ: /businesses/${activeBizId.ifBlank { "অনুপস্থিত" }}/product_submissions",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                        Text(
+                                            text = "• বিজনেস আইডি: ${activeBizId.ifBlank { "অনুপস্থিত" }}",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                        Text(
+                                            text = "• ফায়ারবেস Auth UID: ${authUser?.uid ?: "লগইন নেই (গুগল সাইন-ইন প্রয়োজন)"}",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                        Text(
+                                            text = "• গুগল ইমেইল: ${authUser?.email ?: "নেই"}",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Button(
+                                    onClick = {
+                                        viewModel.fetchDirectProductSubmissions { _, msg, _ ->
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("পুনরায় চেষ্টা করুন (Retry)", fontSize = 13.sp)
                                 }
                             }
-                        ) {
-                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("সার্ভার থেকে সরাসরি রিফ্রেশ করুন", fontSize = 12.sp)
+                        }
+                    } else if (isFetchingSubmissions) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = PrimaryBlue, modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "সার্ভার থেকে প্রোডাক্ট আবেদন লোড হচ্ছে...",
+                                color = MaterialTheme.colorScheme.outline,
+                                fontSize = 13.sp
+                            )
+                        }
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val isSuccessfulFetch = selectedTabIndex == 0 && isFetchSuccessful
+                            Icon(
+                                imageVector = if (isSuccessfulFetch) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(56.dp),
+                                tint = if (isSuccessfulFetch) AccentGreen else Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = when (selectedTabIndex) {
+                                    0 -> if (isSuccessfulFetch) "সার্ভার থেকে সফলভাবে লোড সম্পন্ন হয়েছে। বর্তমানে কোনো অপেক্ষমাণ প্রোডাক্ট সাবমিশন নেই।" else "বর্তমানে কোনো অপেক্ষমাণ প্রোডাক্ট সাবমিশন নেই"
+                                    1 -> "এখনও কোনো প্রোডাক্ট অনুমোদন করা হয়নি"
+                                    else -> "সংশোধনের জন্য ফেরত পাঠানো কোনো প্রোডাক্ট নেই"
+                                },
+                                color = if (isSuccessfulFetch) AccentGreen else Color.Gray,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSuccessfulFetch) FontWeight.Medium else FontWeight.Normal
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.fetchDirectProductSubmissions { _, msg, _ ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("সার্ভার থেকে সরাসরি রিফ্রেশ করুন", fontSize = 12.sp)
+                            }
                         }
                     }
                 }

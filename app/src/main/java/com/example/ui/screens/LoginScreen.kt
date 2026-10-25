@@ -49,6 +49,7 @@ fun LoginScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var isGoogleLoading by remember { mutableStateOf(false) }
+    var showGoogleDiagDialog by remember { mutableStateOf(false) }
     var pendingGoogleUser by remember { mutableStateOf<com.google.firebase.auth.FirebaseUser?>(null) }
     var linkBusinessIdInput by remember { mutableStateOf("") }
     var linkPhoneInput by remember { mutableStateOf("") }
@@ -563,10 +564,29 @@ fun LoginScreen(
                         )
                     }
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Diagnostic Dialog trigger
+                TextButton(
+                    onClick = { showGoogleDiagDialog = true },
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .testTag("google_signin_diagnostic_button")
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Google Sign-In কি ও কনফিগারেশন দেখুন", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(30.dp))
+    }
+
+    if (showGoogleDiagDialog) {
+        com.example.util.GoogleSignInDiagnosticDialog(
+            onDismiss = { showGoogleDiagDialog = false }
+        )
     }
 
     // Account Linking Dialog (when an authenticated Google user needs local staff/admin verification)

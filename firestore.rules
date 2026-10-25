@@ -23,12 +23,29 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isMasterAdminEmail() {
+      return isSignedIn() && request.auth.token.email != null &&
+        request.auth.token.email.lower() in [
+          'ataursek9@gmail.com',
+          'ataurgonee4@gmail.com',
+          'support@smartbiz.local',
+          'gonee8666@gmail.com',
+          'ataulgonee786@gmail.com',
+          'ataurpos@gmail.com',
+          'ataur50305@gmail.com',
+          'a48268993@gmail.com'
+        ];
+    }
+
     // Business ownership / staff helper
     function isBusinessOwner(businessId) {
       return isSignedIn() && (
+        isMasterAdminEmail() ||
         request.auth.uid == businessId ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)) &&
-         get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid) ||
+         (get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid ||
+          ('adminUids' in get(/databases/$(database)/documents/businesses/$(businessId)).data &&
+           request.auth.uid in get(/databases/$(database)/documents/businesses/$(businessId)).data.adminUids))) ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.role == 'ADMIN' &&
          get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
@@ -41,9 +58,7 @@ service cloud.firestore {
 
     function isBusinessStaff(businessId) {
       return isSignedIn() && (
-        request.auth.uid == businessId ||
-        (exists(/databases/$(database)/documents/businesses/$(businessId)) &&
-         get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid) ||
+        isBusinessOwner(businessId) ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.isActive == true) ||
         (request.auth.token.email != null &&
@@ -118,7 +133,7 @@ service cloud.firestore {
     function isValidProductSubmission(data) {
       return data.id is string && data.id.size() <= 128 &&
              data.name is string && data.name.size() > 0 &&
-             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'NEEDS_CORRECTION']));
+             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'NEEDS_CORRECTION', 'REJECTED']));
     }
 
     function isValidTombstone(data) {

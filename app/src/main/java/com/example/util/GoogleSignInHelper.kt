@@ -1,18 +1,28 @@
 package com.example.util
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,10 +48,27 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    const val APK_SIGNING_SHA1 = "72:FA:3A:98:28:0A:44:8B:35:B9:9D:19:3B:93:8B:39:35:F8:A9:E9"
-    const val APK_SIGNING_SHA256 = "52:CC:54:2D:9B:DD:85:CE:41:96:0A:E6:C0:C8:90:83:9E:DE:3D:1F:BB:A0:BB:45:19:02:53:80:19:BF:15:D8"
+    const val APK_SIGNING_SHA1 = "7A:2A:12:6E:35:7C:64:FD:04:1C:AF:42:F4:47:BE:F6:69:6E:56:EB"
+    const val APK_SIGNING_SHA256 = "8D:63:67:62:87:C7:A7:AC:0D:C0:F0:31:86:C8:C1:DF:BC:55:3C:B7:E1:55:6B:CE:60:8C:26:92:42:73:3A:58"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
+
+    data class DiagnosticInfo(
+        val packageName: String,
+        val actualSha1: String,
+        val actualSha256: String,
+        val webClientId: String,
+        val firebaseProjectId: String = "smart-business-manager-71879"
+    )
+
+    fun getDiagnosticInfo(context: Context): DiagnosticInfo {
+        return DiagnosticInfo(
+            packageName = context.packageName,
+            actualSha1 = getSigningSha1(context),
+            actualSha256 = getSigningSha256(context),
+            webClientId = getWebClientId(context)
+        )
+    }
 
     @Suppress("DEPRECATION")
     fun getSigningSha1(context: Context): String {
@@ -132,6 +159,8 @@ object GoogleSignInHelper {
         val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
         val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
 
+        val startTime = System.currentTimeMillis()
+
         scope.launch {
             try {
                 val result = credentialManager.getCredential(activity, request)
@@ -154,28 +183,43 @@ object GoogleSignInHelper {
                     onError("অপ্রত্যাশিত ক্রেডেনশিয়াল ফরম্যাট: $unexpectedType (type: ${credential.type})")
                 }
             } catch (e: GetCredentialCancellationException) {
-                // User intentionally cancelled, closed the bottom sheet, or tapped outside.
-                // This is a standard user interaction and NOT an application crash or Firebase error.
+                val durationMs = System.currentTimeMillis() - startTime
                 val exMsg = e.message ?: "User cancelled"
-                Log.d(TAG, "Google Sign-In cancelled by user: $exMsg")
-                if (onCancelled != null) {
-                    onCancelled()
+                Log.w(TAG, "GetCredentialCancellationException after ${durationMs}ms: $exMsg")
+
+                // If cancelled very quickly (< 1200ms), it means the system or Google Play Services
+                // dismissed it automatically before the user could interact with the account picker!
+                if (durationMs < 1200) {
+                    onError("গুগল সাইন-ইন উইন্ডো না দেখিয়েই স্বয়ংক্রিয়ভাবে বন্ধ হয়ে গেছে (Play Services Auto-Cancelled)।\n\n" +
+                            "সম্ভাব্য কারণ ও সমাধান:\n" +
+                            "১. ফোনে কোনো Google একাউন্টে লগইন নেই। Settings > Accounts-এ Google অ্যাকাউন্ট নিশ্চিত করুন।\n" +
+                            "২. Firebase Console-এ এই APK-এর সাইনিং SHA-1 যুক্ত নেই:\n" +
+                            "   • প্যাকেজ: ${context.packageName}\n" +
+                            "   • সাইনিং SHA-1: $currentSha1\n" +
+                            "   • Web Client ID: $clientId\n\n" +
+                            "Firebase Console > Project Settings > Your apps-এ এই SHA-1 যুক্ত করে পুনরায় চেষ্টা করুন।")
                 } else {
-                    onError("গুগল সাইন-ইন উইন্ডো বন্ধ বা বাতিল করা হয়েছে।")
+                    // Genuine user interaction (user manually closed or tapped outside)
+                    if (onCancelled != null) {
+                        onCancelled()
+                    } else {
+                        onError("গুগল সাইন-ইন উইন্ডো বন্ধ বা বাতিল করা হয়েছে।")
+                    }
                 }
             } catch (e: NoCredentialException) {
                 val exMsg = e.message ?: "No account credentials"
                 Log.w(TAG, "NoCredentialException: $exMsg")
                 onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি।\nঅনুগ্রহ করে ফোনের Settings > Accounts-এ গিয়ে একটি Google অ্যাকাউন্টে লগইন করুন।")
             } catch (e: androidx.credentials.exceptions.GetCredentialCustomException) {
+                val durationMs = System.currentTimeMillis() - startTime
                 val exType = e.type
                 val exMsg = e.message ?: ""
-                Log.e(TAG, "GetCredentialCustomException: type=$exType, message=$exMsg")
+                Log.e(TAG, "GetCredentialCustomException: type=$exType, message=$exMsg, duration=${durationMs}ms")
                 val isDevError = exMsg.contains("10") || exMsg.contains("DEVELOPER_ERROR", ignoreCase = true) || exType.contains("DEVELOPER_ERROR", ignoreCase = true)
                 val isCanceled = exMsg.contains("16") || exMsg.contains("CANCELLED", ignoreCase = true)
 
-                if (isDevError) {
-                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10):\n" +
+                if (isDevError || (isCanceled && durationMs < 1200)) {
+                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error / Code 16):\n" +
                             "Firebase Console-এ এই অ্যাপের প্যাকেজ ও SHA-1 ফিঙ্গারপ্রিন্ট যোগ থাকতে হবে:\n" +
                             "• Package Name: ${context.packageName}\n" +
                             "• সাইনিং SHA-1: $currentSha1\n" +
@@ -281,4 +325,101 @@ fun GoogleSignInButton(
             }
         }
     }
+}
+
+@Composable
+fun GoogleSignInDiagnosticDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val diag = remember { GoogleSignInHelper.getDiagnosticInfo(context) }
+    val fullSummary = "Package: ${diag.packageName}\n" +
+            "SHA-1: ${diag.actualSha1}\n" +
+            "SHA-256: ${diag.actualSha256}\n" +
+            "Web Client ID: ${diag.webClientId}\n" +
+            "Firebase Project: ${diag.firebaseProjectId}"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Google Sign-In কনফিগারেশন ও কি তথ্য",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Google Sign-In সফলভাবে কাজ করার জন্য Firebase Console-এ নিচের সাইনিং SHA-1 যুক্ত থাকা আবশ্যক:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("• Package Name:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                        SelectionContainer {
+                            Text(diag.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
+
+                        Text("• বর্তমান APK-এর সাইনিং SHA-1:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                        SelectionContainer {
+                            Text(diag.actualSha1, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                        }
+
+                        Text("• বর্তমান APK-এর সাইনিং SHA-256:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                        SelectionContainer {
+                            Text(diag.actualSha256, style = MaterialTheme.typography.bodySmall)
+                        }
+
+                        Text("• Web Client ID:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                        SelectionContainer {
+                            Text(diag.webClientId, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Google Sign-In Config", fullSummary)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "কনফিগারেশন তথ্য কপি করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("সব তথ্য কপি করুন")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("ঠিক আছে")
+            }
+        }
+    )
 }

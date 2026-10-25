@@ -744,5 +744,73 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals(ProductSubmissionStatus.PENDING, adminReceived?.status)
         assertEquals(425.0, adminReceived?.sellingPrice ?: 0.0, 0.001)
     }
+
+    // 11. Verify duplicate approval prevention and stock protection
+    @Test
+    fun testDuplicateApprovalRejectionAndStockProtection() = runTest(testDispatcher) {
+        val adminRepo = BusinessRepository(adminDb)
+        val adminUser = User(
+            id = adminId,
+            name = "প্রোপ্রাইটর",
+            phone = "01700000000",
+            role = UserRole.ADMIN,
+            pinHash = "hash_1234"
+        )
+        adminDb.userDao().insertUser(adminUser)
+
+        val sub = ProductSubmission(
+            id = "sub_dup_protect_01",
+            name = "লেদার মানিব্যাগ",
+            productCode = "SKU-WALLET-01",
+            category = "এক্সেসরিজ",
+            purchasePrice = 300.0,
+            sellingPrice = 550.0,
+            initialStock = 15.0,
+            unit = "পিস",
+            description = "জেনুইন লেদার মানিব্যাগ",
+            salesmanId = salesmanId,
+            salesmanName = "করিম",
+            salesmanPhone = "01711000000",
+            status = ProductSubmissionStatus.PENDING
+        )
+        adminDb.productSubmissionDao().insertSubmission(sub)
+
+        // First approval: should succeed and create product with initial stock
+        val approvedProd = adminRepo.approveProductSubmission(sub.id, sub, adminUser)
+        assertNotNull(approvedProd)
+        val savedProd = adminDb.productDao().getProductById(approvedProd.id)
+        assertNotNull(savedProd)
+        assertEquals(15.0, savedProd?.currentStock ?: 0.0, 0.001)
+
+        // Second approval attempt: MUST throw IllegalStateException preventing double-stock
+        try {
+            adminRepo.approveProductSubmission(sub.id, sub, adminUser)
+            fail("Second approval attempt must throw IllegalStateException")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message?.contains("ইতিমধ্যে অনুমোদন করা হয়েছে") == true)
+        }
+
+        // Verify stock remains exactly 15.0 (no double addition)
+        val finalProd = adminDb.productDao().getProductById(approvedProd.id)
+        assertEquals("Stock must not be duplicated", 15.0, finalProd?.currentStock ?: 0.0, 0.001)
+    }
+
+    // 12. Verify all authorized master admin emails
+    @Test
+    fun testMasterAdminEmailsList() {
+        val emails = listOf(
+            "ataursek9@gmail.com",
+            "ataurgonee4@gmail.com",
+            "support@smartbiz.local",
+            "gonee8666@gmail.com",
+            "ataulgonee786@gmail.com",
+            "ataurpos@gmail.com",
+            "ataur50305@gmail.com",
+            "a48268993@gmail.com"
+        )
+        for (email in emails) {
+            assertTrue("Email $email must be recognized as authorized admin", CloudSyncManager.isAuthorizedAdminEmail(email))
+        }
+    }
 }
 

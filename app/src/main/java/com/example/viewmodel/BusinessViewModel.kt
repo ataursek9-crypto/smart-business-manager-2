@@ -486,6 +486,16 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     private val _isFetchingSubmissions = MutableStateFlow(false)
     val isFetchingSubmissions: StateFlow<Boolean> = _isFetchingSubmissions.asStateFlow()
 
+    private val _submissionFetchError = MutableStateFlow<String?>(null)
+    val submissionFetchError: StateFlow<String?> = _submissionFetchError.asStateFlow()
+
+    private val _isSubmissionsFetchSuccessful = MutableStateFlow(false)
+    val isSubmissionsFetchSuccessful: StateFlow<Boolean> = _isSubmissionsFetchSuccessful.asStateFlow()
+
+    fun clearSubmissionFetchError() {
+        _submissionFetchError.value = null
+    }
+
     // Smart Reminder Service & Voice Helper
     val voiceHelper = BengaliVoiceHelper(application)
     val reminderManager = SmartReminderManager(application, repository.getDbInstance(), voiceHelper)
@@ -2163,14 +2173,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     fun fetchDirectProductSubmissions(onComplete: ((Boolean, String, Int) -> Unit)? = null) {
         viewModelScope.launch {
             _isFetchingSubmissions.value = true
+            _submissionFetchError.value = null
             try {
                 val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
                 val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
                 val projectId = try { FirebaseApp.getInstance().options.projectId } catch (_: Exception) { "smart-business-manager-71879" }
 
                 if (bizId.isBlank()) {
-                    val msg = "সতর্কতা: কোনো ক্লাউড বিজনেস আইডি পাওয়া যায়নি।"
+                    val msg = "সতর্কতা: কোনো ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে গুগল সাইন-ইন করে বিজনেস আইডি সেট করুন।"
                     _submissionSyncInfo.value = msg
+                    _submissionFetchError.value = msg
+                    _isSubmissionsFetchSuccessful.value = false
                     _isFetchingSubmissions.value = false
                     Log.w("SubmissionDiagnostics", "[AdminFetch] Failed: $msg")
                     onComplete?.invoke(false, msg, 0)
@@ -2182,13 +2195,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val count = syncManager.fetchDirectProductSubmissions(bizId)
                 val statusMsg = "সার্ভার থেকে $count টি প্রোডাক্ট আবেদন লোড হয়েছে"
                 _submissionSyncInfo.value = "Project: $projectId | BizID: $bizId | প্রাপ্ত আবেদন: $count টি"
+                _isSubmissionsFetchSuccessful.value = true
+                _submissionFetchError.value = null
                 _isFetchingSubmissions.value = false
                 Log.i("SubmissionDiagnostics", "[AdminFetch] Success: $statusMsg")
                 onComplete?.invoke(true, statusMsg, count)
             } catch (e: Exception) {
                 Log.e("SubmissionDiagnostics", "[AdminFetch] Failed: ${e.message}", e)
-                val errMsg = "ক্লাউড আবেদন লোড ব্যর্থ: ${e.localizedMessage ?: e.message}"
+                val errMsg = e.localizedMessage ?: e.message ?: "ক্লাউড আবেদন লোড ব্যর্থ হয়েছে"
                 _submissionSyncInfo.value = errMsg
+                _submissionFetchError.value = errMsg
+                _isSubmissionsFetchSuccessful.value = false
                 _isFetchingSubmissions.value = false
                 onComplete?.invoke(false, errMsg, 0)
             }
