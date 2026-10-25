@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.AppDatabase
 import com.example.data.model.*
+import com.example.data.repository.BusinessRepository
 import com.example.data.sync.CloudBusinessAuth
 import com.example.data.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
@@ -697,4 +698,51 @@ class TwoDeviceSubmissionSyncTest {
         assertEquals(1445.0, salesmanFinalProduct?.sellingPrice ?: 0.0, 0.001)
         assertEquals("Purchase price must remain confidential (0.0) for salesman", 0.0, salesmanFinalProduct?.purchasePrice ?: 0.0, 0.001)
     }
+
+    // 10. Verify admin email ataur50305@gmail.com authorization and Cloud Submission schema integrity
+    @Test
+    fun testAdminEmailAuthorizationAndCloudSubmissionSchemaIntegrity() = runTest(testDispatcher) {
+        val adminEmail = "ataur50305@gmail.com"
+        assertTrue("CloudSyncManager must recognize ataur50305@gmail.com as authorized admin", CloudSyncManager.isAuthorizedAdminEmail(adminEmail))
+        val adminRepo = BusinessRepository(adminDb)
+        assertTrue("BusinessRepository must recognize ataur50305@gmail.com as authorized admin", adminRepo.isAuthorizedAdminEmail(adminEmail))
+
+        // Verify Product Submission Cloud Document Map matches firestore.rules
+        val testSub = ProductSubmission(
+            id = "sub_schema_test_01",
+            name = "ব্ল্যাক টি-শার্ট",
+            productCode = "SKU-BLK-TSHIRT",
+            category = "পোশাক",
+            purchasePrice = 250.0,
+            sellingPrice = 425.0,
+            initialStock = 50.0,
+            unit = "পিস",
+            description = "১০০% কটন প্রিমিয়াম টি-শার্ট",
+            salesmanId = salesmanId,
+            salesmanName = "করিম আহমেদ",
+            salesmanPhone = "01711000000",
+            status = ProductSubmissionStatus.PENDING,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(testSub, businessId)
+
+        // Schema assertions matching firestore.rules isValidProductSubmission(data)
+        assertEquals("sub_schema_test_01", cloudMap["id"])
+        assertEquals("ব্ল্যাক টি-শার্ট", cloudMap["name"])
+        assertEquals("PENDING", cloudMap["status"])
+        assertEquals(businessId, cloudMap["businessId"])
+        assertEquals(salesmanId, cloudMap["salesmanId"])
+        assertEquals(250.0, (cloudMap["purchasePrice"] as Number).toDouble(), 0.001)
+        assertEquals(425.0, (cloudMap["sellingPrice"] as Number).toDouble(), 0.001)
+        assertEquals(50.0, (cloudMap["initialStock"] as Number).toDouble(), 0.001)
+
+        // Admin applies remote submission map
+        adminSyncManager.applyRemoteSubmissionMap(cloudMap)
+        val adminReceived = adminDb.productSubmissionDao().getSubmissionById("sub_schema_test_01")
+        assertNotNull("Admin Room database must receive submission", adminReceived)
+        assertEquals(ProductSubmissionStatus.PENDING, adminReceived?.status)
+        assertEquals(425.0, adminReceived?.sellingPrice ?: 0.0, 0.001)
+    }
 }
+

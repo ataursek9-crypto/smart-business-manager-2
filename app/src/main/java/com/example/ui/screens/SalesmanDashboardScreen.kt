@@ -799,6 +799,9 @@ fun SalesmanDashboardScreen(
                                         authUser = fUser
                                         Toast.makeText(context, "গুগল সাইন-ইন সফল: ${fUser.displayName ?: fUser.email}", Toast.LENGTH_SHORT).show()
                                     },
+                                    onCancelled = {
+                                        isGoogleSigningIn = false
+                                    },
                                     onError = { err ->
                                         isGoogleSigningIn = false
                                         connectError = err

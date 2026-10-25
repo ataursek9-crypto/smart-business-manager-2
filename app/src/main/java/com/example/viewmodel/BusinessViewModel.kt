@@ -465,7 +465,14 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     val mySubmissions: StateFlow<List<ProductSubmission>> = combine(_currentUser, allSubmissions) { user, subs ->
         if (user == null) emptyList()
         else if (user.role == UserRole.ADMIN) subs
-        else subs.filter { it.salesmanId == user.id }
+        else {
+            val authUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null } ?: ""
+            subs.filter { sub ->
+                sub.salesmanId == user.id ||
+                (authUid.isNotBlank() && sub.salesmanId == authUid) ||
+                (user.phone.isNotBlank() && sub.salesmanPhone == user.phone)
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Feedback message
@@ -675,7 +682,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     val myExpenses: StateFlow<List<Expense>> = combine(_currentUser, allExpenses) { user, expenses ->
         if (user == null) emptyList()
         else if (user.role == UserRole.ADMIN) expenses
-        else expenses.filter { it.salesmanId == user.id }
+        else {
+            val authUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null } ?: ""
+            expenses.filter { exp ->
+                exp.salesmanId == user.id || (authUid.isNotBlank() && exp.salesmanId == authUid)
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // -------------------------------------------------------------
@@ -1862,7 +1874,6 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
                 // Direct authoritative cloud upload for immediate multi-device visibility
                 var cloudUploaded = false
-                var cloudDiagnosticMsg: String? = null
                 val projectId = try { FirebaseApp.getInstance().options.projectId } catch (_: Exception) { "smart-business-manager-71879" }
                 val businessId = try {
                     syncManager.resolveOrFetchBusinessId()
@@ -1873,38 +1884,40 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val docPath = if (businessId.isNotBlank()) "/businesses/$businessId/product_submissions/${submission.id}" else "NO_BIZ_ID"
                 Log.i("SubmissionDiagnostics", "[ProductSubmit] Project: $projectId, StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, SubId: ${submission.id}, SKU: ${submission.productCode}, DocPath: $docPath")
 
-                val isCloudConfigured = syncManager.isCloudBackendConfigured()
-                if (isCloudConfigured) {
-                    if (authUser == null) {
-                        Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: FirebaseAuth currentUser is null.")
-                        onError("গুগল সাইন-ইন না থাকায় ক্লাউডে অ্যাডমিনের কাছে পাঠানো যায়নি। অনুগ্রহ করে গুগল অ্যাকাউন্টে সাইন-ইন করুন।")
-                        return@launch
-                    }
-                    if (businessId.isBlank()) {
-                        Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: Business ID is blank.")
-                        onError("কোনো সক্রিয় ক্লাউড বিজনেস কোড নেই! ড্যাশবোর্ড থেকে অ্যাডমিনের বিজনেস কোড দিয়ে যুক্ত হন।")
-                        return@launch
-                    }
-                    try {
-                        val firestore = FirebaseFirestore.getInstance()
-                        syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
-                        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(submission, businessId)
-                        firestore.collection("businesses")
-                            .document(businessId)
-                            .collection("product_submissions")
-                            .document(submission.id)
-                            .set(cloudMap, SetOptions.merge())
-                            .awaitResult()
-                        cloudUploaded = true
-                        Log.i("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload SUCCEEDED -> $docPath")
-                    } catch (e: Exception) {
-                        Log.e("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload FAILED -> $docPath: ${e.message}", e)
-                        onError("সার্ভারে ক্লাউড সাবমিশন ব্যর্থ: ${e.localizedMessage ?: e.message}")
-                        return@launch
-                    }
+                // REQUIREMENT: Must verify real Firestore server upload response.
+                // Never treat Room database save alone as a successful submission to Admin!
+                if (authUser == null || authUser.uid.isBlank()) {
+                    Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: FirebaseAuth currentUser is null.")
+                    onError("গুগল সাইন-ইন না থাকায় ক্লাউডে অ্যাডমিনের কাছে পাঠানো যায়নি। অনুগ্রহ করে গুগল অ্যাকাউন্টে সাইন-ইন করুন।")
+                    return@launch
+                }
+                if (businessId.isBlank()) {
+                    Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: Business ID is blank.")
+                    onError("কোনো সক্রিয় ক্লাউড বিজনেস কোড নেই! ড্যাশবোর্ড থেকে অ্যাডমিনের বিজনেস কোড দিয়ে যুক্ত হন।")
+                    return@launch
                 }
 
-                _toastMessage.emit(if (cloudUploaded) "প্রোডাক্ট সফলভাবে ক্লাউডে জমা হয়েছে (অ্যাডমিন অনুমোদনের অপেক্ষায়)" else "প্রোডাক্ট সফলভাবে জমা দেওয়া হয়েছে")
+                try {
+                    val firestore = FirebaseFirestore.getInstance()
+                    syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
+                    // Fetch the authoritative persisted submission from Room to guarantee consistent SKU/timestamps
+                    val persistedSubmission = repository.getSubmissionById(subId) ?: submission
+                    val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(persistedSubmission, businessId)
+                    firestore.collection("businesses")
+                        .document(businessId)
+                        .collection("product_submissions")
+                        .document(subId)
+                        .set(cloudMap, SetOptions.merge())
+                        .awaitResult()
+                    cloudUploaded = true
+                    Log.i("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload SUCCEEDED -> $docPath")
+                } catch (e: Exception) {
+                    Log.e("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload FAILED -> $docPath: ${e.message}", e)
+                    onError("সার্ভারে ক্লাউড সাবমিশন ব্যর্থ: ${e.localizedMessage ?: e.message}")
+                    return@launch
+                }
+
+                _toastMessage.emit("প্রোডাক্ট সফলভাবে ক্লাউডে জমা হয়েছে (অ্যাডমিন অনুমোদনের অপেক্ষায়)")
                 syncManager.triggerSync()
                 onSuccess()
 
@@ -1981,33 +1994,43 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 repository.resubmitProductForCorrection(submissionId, dummyUpdated, user)
 
                 // Direct authoritative cloud upload for immediate multi-device visibility
-                if (syncManager.isCloudBackendConfigured()) {
-                    val projectId = try { FirebaseApp.getInstance().options.projectId } catch (_: Exception) { "unknown" }
-                    val storedBizCode = CloudBusinessAuth.getStoredBusinessId(getApplication())
-                    val businessId = try {
-                        syncManager.resolveOrFetchBusinessId()
-                    } catch (e: Exception) {
-                        getActiveBusinessId()
-                    }
-                    Log.i("SubmissionDiagnostics", "[ProductResubmit] Project: $projectId, StoredBizCode: $storedBizCode, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, DocPath: /businesses/$businessId/product_submissions/$submissionId")
+                val projectId = try { FirebaseApp.getInstance().options.projectId } catch (_: Exception) { "smart-business-manager-71879" }
+                val storedBizCode = CloudBusinessAuth.getStoredBusinessId(getApplication())
+                val businessId = try {
+                    syncManager.resolveOrFetchBusinessId()
+                } catch (e: Exception) {
+                    getActiveBusinessId()
+                }
+                val docPath = if (businessId.isNotBlank()) "/businesses/$businessId/product_submissions/$submissionId" else "NO_BIZ_ID"
+                Log.i("SubmissionDiagnostics", "[ProductResubmit] Project: $projectId, StoredBizCode: $storedBizCode, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, DocPath: $docPath")
 
-                    if (businessId.isNotBlank()) {
-                        val firestore = FirebaseFirestore.getInstance()
-                        if (authUser != null) {
-                            syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
-                        }
-                        val updatedFromDb = repository.getSubmissionById(submissionId) ?: dummyUpdated.copy(id = submissionId)
-                        val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(updatedFromDb, businessId)
-                        firestore.collection("businesses")
-                            .document(businessId)
-                            .collection("product_submissions")
-                            .document(submissionId)
-                            .set(cloudMap, SetOptions.merge())
-                            .awaitResult()
-                        Log.i("SubmissionDiagnostics", "[ProductResubmit] Direct cloud resubmission SUCCEEDED for: $submissionId")
-                    } else {
-                        throw IllegalStateException("কোনো সক্রিয় ক্লাউড বিজনেস আইডি পাওয়া যায়নি।")
-                    }
+                if (authUser == null || authUser.uid.isBlank()) {
+                    Log.w("SubmissionDiagnostics", "[ProductResubmit] Cloud upload aborted: FirebaseAuth currentUser is null.")
+                    onError("গুগল সাইন-ইন না থাকায় ক্লাউডে অ্যাডমিনের কাছে পাঠানো যায়নি। অনুগ্রহ করে গুগল অ্যাকাউন্টে সাইন-ইন করুন।")
+                    return@launch
+                }
+                if (businessId.isBlank()) {
+                    Log.w("SubmissionDiagnostics", "[ProductResubmit] Cloud upload aborted: Business ID is blank.")
+                    onError("কোনো সক্রিয় ক্লাউড বিজনেস কোড নেই! ড্যাশবোর্ড থেকে অ্যাডমিনের বিজনেস কোড দিয়ে যুক্ত হন।")
+                    return@launch
+                }
+
+                try {
+                    val firestore = FirebaseFirestore.getInstance()
+                    syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
+                    val updatedFromDb = repository.getSubmissionById(submissionId) ?: dummyUpdated.copy(id = submissionId)
+                    val cloudMap = CloudSyncManager.mapProductSubmissionToCloud(updatedFromDb, businessId)
+                    firestore.collection("businesses")
+                        .document(businessId)
+                        .collection("product_submissions")
+                        .document(submissionId)
+                        .set(cloudMap, SetOptions.merge())
+                        .awaitResult()
+                    Log.i("SubmissionDiagnostics", "[ProductResubmit] Direct cloud resubmission SUCCEEDED for: $docPath")
+                } catch (e: Exception) {
+                    Log.e("SubmissionDiagnostics", "[ProductResubmit] Direct cloud resubmission FAILED -> $docPath: ${e.message}", e)
+                    onError("সার্ভারে ক্লাউড সাবমিশন ব্যর্থ: ${e.localizedMessage ?: e.message}")
+                    return@launch
                 }
 
                 _toastMessage.emit("সংশোধিত প্রোডাক্ট সফলভাবে পুনরায় জমা দেওয়া হয়েছে")

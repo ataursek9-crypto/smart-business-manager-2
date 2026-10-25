@@ -649,6 +649,101 @@ fun SettingsScreen(
                 }
             }
 
+            // Project & APK Export System Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_settings_export_system"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(2.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2E7D32).copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(
+                                color = Color(0xFFE8F5E9),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.DownloadForOffline, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(24.dp))
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "প্রজেক্ট ও APK এক্সপোর্ট সিস্টেম",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF1B5E20)
+                                )
+                                Text(
+                                    text = "সোর্স কোড + ইনস্টলেশন উপযোগী আসল APK",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+
+                        Surface(
+                            color = Color(0xFFE8F5E9),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                "প্রস্তুত ✅",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2E7D32),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Android, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("APK ফাইল: ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("release-files/SmartBusinessManager.apk", fontSize = 11.5.sp, color = PrimaryNavy, fontWeight = FontWeight.Medium)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.FolderZip, contentDescription = null, tint = PrimaryNavy, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("এক্সপোর্ট জিপ: ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("SmartBusinessManager_Export.zip", fontSize = 11.5.sp, color = PrimaryNavy, fontWeight = FontWeight.Medium)
+                        }
+                        Text(
+                            text = "• AI Studio-র Export ZIP ডাউনলোড করলে এই ইনস্টলযোগ্য APK ও সোর্স কোড উভয়ই একসাথে পাবেন।\n• টার্মিনালে 'gradle exportZip' বা './export_project.sh' চালালেও নতুন APK তৈরি ও প্যাকেজ তৈরি হবে।",
+                            fontSize = 11.sp,
+                            color = Color.DarkGray,
+                            lineHeight = 16.sp
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("APK Path", "release-files/SmartBusinessManager.apk"))
+                            Toast.makeText(context, "APK পাথ ক্লিপবোর্ডে কপি করা হয়েছে: release-files/SmartBusinessManager.apk", Toast.LENGTH_LONG).show()
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_copy_apk_path")
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("APK ফাইলের পাথ কপি করুন", fontSize = 12.sp)
+                    }
+                }
+            }
+
+
             Button(
                 onClick = {
                     viewModel.updateCompanySettings(

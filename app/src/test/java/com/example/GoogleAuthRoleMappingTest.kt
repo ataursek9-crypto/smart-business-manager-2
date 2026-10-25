@@ -106,6 +106,30 @@ class GoogleAuthRoleMappingTest {
     }
 
     @Test
+    fun `test ataur50305@gmail com is recognized as primary business owner and assigned ADMIN role`() = runTest(testDispatcher) {
+        var callbackSuccess: Boolean? = null
+        var callbackRole: UserRole? = null
+
+        viewModel.handleGoogleUserCredentials(
+            uid = "owner_ataur50305_uid",
+            email = "ataur50305@gmail.com",
+            displayName = "আতাউর রহমান",
+            phoneNumber = "01700000000"
+        ) { success, _, role ->
+            callbackSuccess = success
+            callbackRole = role
+        }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+        assertTrue("ataur50305@gmail.com owner authentication must succeed", callbackSuccess == true)
+        assertEquals("Must be assigned ADMIN role", UserRole.ADMIN, callbackRole)
+        assertEquals(UserRole.ADMIN, viewModel.currentUser.value?.role)
+        assertEquals("owner_ataur50305_uid", viewModel.currentUser.value?.id)
+    }
+
+    @Test
     fun `test linking Google account with valid local salesman PIN assigns SALESMAN role`() = runTest(testDispatcher) {
         val salesmanPinHash = repo.hashPin("5555")
         val localSalesman = User(

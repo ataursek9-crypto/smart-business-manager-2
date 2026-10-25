@@ -285,6 +285,10 @@ fun AdminLoginScreen(
                                         }
                                     }
                                 },
+                                onCancelled = {
+                                    isGoogleLoading = false
+                                    // User closed account picker - reset cleanly without showing error
+                                },
                                 onError = { err ->
                                     isGoogleLoading = false
                                     errorMessage = err

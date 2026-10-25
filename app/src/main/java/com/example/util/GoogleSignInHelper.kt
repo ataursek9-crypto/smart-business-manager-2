@@ -37,9 +37,9 @@ object GoogleSignInHelper {
     private const val TAG = "GoogleSignInHelper"
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
-    // Verified using: apksigner verify --print-certs app-debug.apk and keytool -list -v -keystore debug.keystore
-    const val APK_SIGNING_SHA1 = "EC:9F:34:AD:BE:82:56:47:5C:CC:96:62:B2:19:02:1E:99:A2:00:19"
-    const val APK_SIGNING_SHA256 = "15:78:6F:B9:73:B6:5F:42:EC:2B:2D:88:40:10:6A:03:7A:C5:F9:8A:A0:98:B5:B2:E6:EC:F5:92:3C:BB:2F:90"
+    // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
+    const val APK_SIGNING_SHA1 = "72:FA:3A:98:28:0A:44:8B:35:B9:9D:19:3B:93:8B:39:35:F8:A9:E9"
+    const val APK_SIGNING_SHA256 = "52:CC:54:2D:9B:DD:85:CE:41:96:0A:E6:C0:C8:90:83:9E:DE:3D:1F:BB:A0:BB:45:19:02:53:80:19:BF:15:D8"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 
@@ -95,9 +95,9 @@ object GoogleSignInHelper {
 
     fun getWebClientId(context: Context): String {
         return try {
-            var resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+            var resId = context.resources.getIdentifier("default_web_client_id", "string", "com.example")
             if (resId == 0) {
-                resId = context.resources.getIdentifier("default_web_client_id", "string", "com.example")
+                resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
             }
             if (resId != 0) context.getString(resId) else DEFAULT_WEB_CLIENT_ID
         } catch (_: Exception) {
@@ -109,6 +109,7 @@ object GoogleSignInHelper {
         context: Context,
         scope: CoroutineScope,
         onAuthSuccess: (FirebaseUser) -> Unit,
+        onCancelled: (() -> Unit)? = null,
         onError: (String) -> Unit
     ) {
         val activity = context as? Activity
@@ -142,7 +143,7 @@ object GoogleSignInHelper {
                     val authResult = FirebaseAuth.getInstance().signInWithCredential(authCredential).await()
                     val user = authResult.user
                     if (user != null) {
-                        Log.i(TAG, "FirebaseAuth sign-in success: uid=${user.uid}, email=${user.email}")
+                        Log.i(TAG, "FirebaseAuth sign-in success: uid=${user.uid}")
                         onAuthSuccess(user)
                     } else {
                         onError("ফায়ারবেস ব্যবহারকারী সেশন শুরু করা সম্ভব হয়নি। (AuthResult returned null user)")
@@ -153,53 +154,80 @@ object GoogleSignInHelper {
                     onError("অপ্রত্যাশিত ক্রেডেনশিয়াল ফরম্যাট: $unexpectedType (type: ${credential.type})")
                 }
             } catch (e: GetCredentialCancellationException) {
-                val exMsg = e.message ?: "Operation was canceled"
-                Log.w(TAG, "GetCredentialCancellationException: $exMsg", e)
-                onError("গুগল সাইন-ইন উইন্ডো বন্ধ বা বাতিল হয়েছে।\n" +
-                        "ত্রুটি বিবরণ: [${e.javaClass.simpleName}] $exMsg\n\n" +
-                        "লক্ষণীয়: সাইন-ইন ডায়ালগ না এসে সাথে সাথে বন্ধ হলে Firebase Console-এ SHA-1 বা Package Mismatch রয়েছে।\n" +
-                        "আসল প্যাকেজ: ${context.packageName}\n" +
-                        "আসল SHA-1: $currentSha1")
+                // User intentionally cancelled, closed the bottom sheet, or tapped outside.
+                // This is a standard user interaction and NOT an application crash or Firebase error.
+                val exMsg = e.message ?: "User cancelled"
+                Log.d(TAG, "Google Sign-In cancelled by user: $exMsg")
+                if (onCancelled != null) {
+                    onCancelled()
+                } else {
+                    onError("গুগল সাইন-ইন উইন্ডো বন্ধ বা বাতিল করা হয়েছে।")
+                }
             } catch (e: NoCredentialException) {
                 val exMsg = e.message ?: "No account credentials"
-                Log.w(TAG, "NoCredentialException: $exMsg", e)
-                onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি।\nত্রুটি বিবরণ: $exMsg\nঅনুগ্রহ করে ফোনের Settings > Accounts-এ গুগল অ্যাকাউন্ট যোগ করুন।")
+                Log.w(TAG, "NoCredentialException: $exMsg")
+                onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি।\nঅনুগ্রহ করে ফোনের Settings > Accounts-এ গিয়ে একটি Google অ্যাকাউন্টে লগইন করুন।")
+            } catch (e: androidx.credentials.exceptions.GetCredentialCustomException) {
+                val exType = e.type
+                val exMsg = e.message ?: ""
+                Log.e(TAG, "GetCredentialCustomException: type=$exType, message=$exMsg")
+                val isDevError = exMsg.contains("10") || exMsg.contains("DEVELOPER_ERROR", ignoreCase = true) || exType.contains("DEVELOPER_ERROR", ignoreCase = true)
+                val isCanceled = exMsg.contains("16") || exMsg.contains("CANCELLED", ignoreCase = true)
+
+                if (isDevError) {
+                    onError("গুগল সাইন-ইন কনফিগারেশন ত্রুটি (Developer Error 10):\n" +
+                            "Firebase Console-এ এই অ্যাপের প্যাকেজ ও SHA-1 ফিঙ্গারপ্রিন্ট যোগ থাকতে হবে:\n" +
+                            "• Package Name: ${context.packageName}\n" +
+                            "• সাইনিং SHA-1: $currentSha1\n" +
+                            "• Web Client ID: $clientId\n\n" +
+                            "Firebase Console > Project Settings > Your apps-এ SHA-1 যোগ করে google-services.json আপডেট করুন।")
+                } else if (isCanceled) {
+                    if (onCancelled != null) {
+                        onCancelled()
+                    } else {
+                        onError("গুগল সাইন-ইন সার্ভিস থেকে অনুরোধ বাতিল হয়েছে।")
+                    }
+                } else {
+                    onError("গুগল সাইন-ইন সার্ভিস ত্রুটি: $exType\nবিবরণ: $exMsg")
+                }
+            } catch (e: androidx.credentials.exceptions.GetCredentialProviderConfigurationException) {
+                Log.e(TAG, "GetCredentialProviderConfigurationException: ${e.message}")
+                onError("ক্রেডেনশিয়াল প্রোভাইডার কনফিগারেশনে সমস্যা হয়েছে। অনুগ্রহ করে ডিভাইসের গুগল প্লে সার্ভিস আপডেট করুন।")
+            } catch (e: androidx.credentials.exceptions.GetCredentialUnsupportedException) {
+                Log.e(TAG, "GetCredentialUnsupportedException: ${e.message}")
+                onError("এই ডিভাইসে Google Credential Manager সমর্থিত নয়।")
+            } catch (e: androidx.credentials.exceptions.GetCredentialInterruptedException) {
+                Log.w(TAG, "GetCredentialInterruptedException: ${e.message}")
+                if (onCancelled != null) {
+                    onCancelled()
+                } else {
+                    onError("গুগল সাইন-ইন প্রক্রিয়া বিঘ্নিত হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
+                }
             } catch (e: GetCredentialException) {
                 val exType = e.type
                 val exMsg = e.message ?: ""
-                val exCause = e.cause?.toString() ?: "None"
-                Log.e(TAG, "GetCredentialException: type=$exType, message=$exMsg, cause=$exCause", e)
-                val isDevError = exMsg.contains("10") || exMsg.contains("DEVELOPER_ERROR", ignoreCase = true) || exType.contains("DEVELOPER_ERROR", ignoreCase = true)
-                val isCanceled = exMsg.contains("16") || exMsg.contains("CANCELLED", ignoreCase = true)
-                val summary = when {
-                    isDevError -> "Developer Error (Code 10: SHA-1 / Package Mismatch)"
-                    isCanceled -> "Operation Canceled (Code 16 / OAuth Client Not Found)"
-                    else -> "Credential Manager Exception ($exType)"
+                Log.e(TAG, "GetCredentialException: type=$exType, message=$exMsg")
+                onError("গুগল সাইন-ইন ব্যর্থ হয়েছে [${exType}]: $exMsg")
+            } catch (e: com.google.firebase.auth.FirebaseAuthException) {
+                val errCode = e.errorCode
+                val exMsg = e.message ?: ""
+                Log.e(TAG, "FirebaseAuthException: errorCode=$errCode, msg=$exMsg")
+                if (errCode == "ERROR_OPERATION_NOT_ALLOWED" || exMsg.contains("operation-not-allowed", ignoreCase = true)) {
+                    onError("Firebase Authentication-এ Google Sign-in সক্রিয় করা নেই!\n" +
+                            "Firebase Console > Authentication > Sign-in method-এ যান, Google চালু করুন এবং Support Email নির্বাচন করে সংরক্ষণ করুন।")
+                } else if (errCode == "ERROR_INVALID_CREDENTIAL") {
+                    onError("Google শংসাপত্রটি অবৈধ বা মেয়াদোত্তীর্ণ। অনুগ্রহ করে পুনরায় চেষ্টা করুন।")
+                } else {
+                    onError("Firebase Authentication ত্রুটি ($errCode): $exMsg")
                 }
-                onError("গুগল সাইন-ইন ব্যর্থ হয়েছে: $summary\n" +
-                        "প্রকৃত বার্তা: $exMsg\n" +
-                        "Type: $exType\n" +
-                        "Cause: $exCause\n\n" +
-                        "Firebase Console-এ প্রয়োজনীয় কনফিগারেশন:\n" +
-                        "• Package Name: ${context.packageName}\n" +
-                        "• আসল SHA-1: $currentSha1\n" +
-                        "• আসল SHA-256: $currentSha256\n" +
-                        "• Web Client ID: $clientId")
+            } catch (e: com.google.firebase.FirebaseNetworkException) {
+                Log.e(TAG, "FirebaseNetworkException: ${e.message}")
+                onError("ইন্টারনেট সংযোগে সমস্যা হচ্ছে। আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।")
             } catch (e: Exception) {
                 val exClass = e.javaClass.simpleName
                 val exMsg = e.localizedMessage ?: e.message ?: "Unknown"
-                val exCause = e.cause?.toString() ?: "None"
-                Log.e(TAG, "General Authentication Exception: $exClass: $exMsg, cause=$exCause", e)
-                if (exMsg.contains("operation-not-allowed", ignoreCase = true) || exMsg.contains("disabled", ignoreCase = true)) {
-                    onError("Firebase Authentication-এ Google Sign-in সক্রিয় করা নেই!\n" +
-                            "Firebase Console > Authentication > Sign-in method-এ যান, Google চালু করুন এবং Support Email নির্বাচন করে সংরক্ষণ করুন।\n" +
-                            "বিস্তারিত: [$exClass] $exMsg")
-                } else {
-                    onError("সাইন-ইন ব্যর্থ হয়েছে: [$exClass]\n" +
-                            "বার্তা: $exMsg\n" +
-                            "Cause: $exCause\n\n" +
-                            "ডিভাইস তথ্য: Package=${context.packageName}, SHA-1=$currentSha1")
-                }
+                Log.e(TAG, "General Authentication Exception: $exClass: $exMsg", e)
+                onError("সাইন-ইন সম্পন্ন করা যায়নি [$exClass]: $exMsg")
             }
         }
     }

@@ -552,6 +552,10 @@ fun LoginScreen(
                                     }
                                 }
                             },
+                            onCancelled = {
+                                isGoogleLoading = false
+                                // User dismissed account picker - reset loading without error
+                            },
                             onError = { err ->
                                 isGoogleLoading = false
                                 errorMessage = err

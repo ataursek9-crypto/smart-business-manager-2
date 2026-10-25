@@ -149,10 +149,12 @@ fun AdminProductApprovalScreen(
                         }
                     }
                     if (!submissionSyncInfo.isNullOrBlank()) {
+                        val isError = submissionSyncInfo!!.contains("ব্যর্থ") || submissionSyncInfo!!.contains("সতর্কতা") || submissionSyncInfo!!.contains("Failed")
                         Text(
                             text = submissionSyncInfo!!,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            fontSize = 11.sp,
+                            fontWeight = if (isError) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         )
                     }
                 }
