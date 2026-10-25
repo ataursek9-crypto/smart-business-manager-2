@@ -73,6 +73,7 @@ fun SalesmanProductSubmissionScreen(
     var description by remember { mutableStateOf(submissionToEdit?.description ?: "") }
 
     val productImageMode by viewModel.productImageMode.collectAsStateWithLifecycle()
+    val activeBizId by viewModel.activeBusinessId.collectAsStateWithLifecycle()
     var imageUri by remember(submissionToEdit) { mutableStateOf(submissionToEdit?.imageUri) }
     var imageSource by remember(submissionToEdit) { mutableStateOf(submissionToEdit?.imageSource ?: "NONE") }
     var imageSourceInfo by remember(submissionToEdit) { mutableStateOf(submissionToEdit?.imageSourceInfo ?: "") }
@@ -139,6 +140,49 @@ fun SalesmanProductSubmissionScreen(
                             fontSize = 12.sp,
                             color = PrimaryNavy
                         )
+                    }
+                }
+            }
+
+            // Cloud Connection Destination Status
+            item {
+                if (activeBizId.isNotBlank()) {
+                    Surface(
+                        color = Color(0xFFE8F5E9),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.CloudDone, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "ক্লাউড সিঙ্ক সক্রিয় (বিজনেস আইডি: $activeBizId) — জমা দেওয়ার সাথে সাথে অ্যাডমিনের ফোনে চলে যাবে।",
+                                fontSize = 11.sp,
+                                color = Color(0xFF1B5E20)
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        color = Color(0xFFFFF3E0),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "সতর্কতা: ক্লাউড ব্যবসার সাথে সংযোগ নেই। প্রোডাক্টটি কেবল এই ফোনে সংরক্ষিত থাকবে। অ্যাডমিনের ফোনে পাঠানোর জন্য ড্যাশবোর্ড থেকে অ্যাডমিনের বিজনেস কোড কানেক্ট করুন।",
+                                fontSize = 11.sp,
+                                color = Color(0xFFBF360C)
+                            )
+                        }
                     }
                 }
             }

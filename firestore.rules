@@ -117,17 +117,8 @@ service cloud.firestore {
 
     function isValidProductSubmission(data) {
       return data.id is string && data.id.size() <= 128 &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
-             data.category is string && data.category.size() <= 100 &&
-             data.purchasePrice is number && data.purchasePrice >= 0 &&
-             data.sellingPrice is number && data.sellingPrice >= 0 &&
-             data.initialStock is number && data.initialStock >= 0 &&
-             (!('productCode' in data) || (data.productCode is string && data.productCode.size() <= 100)) &&
-             (!('unit' in data) || (data.unit is string && data.unit.size() <= 50)) &&
-             (!('salesmanId' in data) || (data.salesmanId is string && data.salesmanId.size() <= 128)) &&
-             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'NEEDS_CORRECTION'])) &&
-             (!('adminCorrectionNote' in data) || (data.adminCorrectionNote is string && data.adminCorrectionNote.size() <= 500)) &&
-             (!('imageUri' in data) || (data.imageUri is string && data.imageUri.size() <= 1000));
+             data.name is string && data.name.size() > 0 &&
+             (!('status' in data) || (data.status is string && data.status in ['PENDING', 'APPROVED', 'NEEDS_CORRECTION']));
     }
 
     function isValidTombstone(data) {

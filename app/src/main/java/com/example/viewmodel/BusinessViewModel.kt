@@ -1873,13 +1873,18 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val docPath = if (businessId.isNotBlank()) "/businesses/$businessId/product_submissions/${submission.id}" else "NO_BIZ_ID"
                 Log.i("SubmissionDiagnostics", "[ProductSubmit] Project: $projectId, StoredBizCode: ${CloudBusinessAuth.getStoredBusinessId(getApplication())}, ResolvedBizId: $businessId, AuthUid: ${authUser?.uid}, Role: ${user.role}, SubId: ${submission.id}, SKU: ${submission.productCode}, DocPath: $docPath")
 
-                if (authUser == null) {
-                    cloudDiagnosticMsg = "গুগল সাইন-ইন না থাকায় ক্লাউডে সরাসরি পাঠানো যায়নি"
-                    Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: FirebaseAuth currentUser is null.")
-                } else if (businessId.isBlank()) {
-                    cloudDiagnosticMsg = "সক্রিয় ক্লাউড বিজনেস কোড না থাকায় ক্লাউডে পাঠানো যায়নি"
-                    Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: Business ID is blank.")
-                } else {
+                val isCloudConfigured = syncManager.isCloudBackendConfigured()
+                if (isCloudConfigured) {
+                    if (authUser == null) {
+                        Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: FirebaseAuth currentUser is null.")
+                        onError("গুগল সাইন-ইন না থাকায় ক্লাউডে অ্যাডমিনের কাছে পাঠানো যায়নি। অনুগ্রহ করে গুগল অ্যাকাউন্টে সাইন-ইন করুন।")
+                        return@launch
+                    }
+                    if (businessId.isBlank()) {
+                        Log.w("SubmissionDiagnostics", "[ProductSubmit] Cloud upload aborted: Business ID is blank.")
+                        onError("কোনো সক্রিয় ক্লাউড বিজনেস কোড নেই! ড্যাশবোর্ড থেকে অ্যাডমিনের বিজনেস কোড দিয়ে যুক্ত হন।")
+                        return@launch
+                    }
                     try {
                         val firestore = FirebaseFirestore.getInstance()
                         syncManager.ensureStaffLinked(businessId, authUser.uid, user.phone, user.name, UserRole.SALESMAN.name)
@@ -1893,18 +1898,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         cloudUploaded = true
                         Log.i("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload SUCCEEDED -> $docPath")
                     } catch (e: Exception) {
-                        cloudDiagnosticMsg = "ক্লাউড ত্রুটি: ${e.localizedMessage ?: e.message}"
                         Log.e("SubmissionDiagnostics", "[ProductSubmit] Direct cloud upload FAILED -> $docPath: ${e.message}", e)
+                        onError("সার্ভারে ক্লাউড সাবমিশন ব্যর্থ: ${e.localizedMessage ?: e.message}")
+                        return@launch
                     }
                 }
 
-                if (cloudUploaded) {
-                    _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে ক্লাউডে জমা দেওয়া হয়েছে")
-                } else if (cloudDiagnosticMsg != null) {
-                    _toastMessage.emit("প্রোডাক্ট এই ফোনে সংরক্ষিত হয়েছে ($cloudDiagnosticMsg)")
-                } else {
-                    _toastMessage.emit("প্রোডাক্ট অনুমোদনের জন্য সফলভাবে জমা দেওয়া হয়েছে")
-                }
+                _toastMessage.emit(if (cloudUploaded) "প্রোডাক্ট সফলভাবে ক্লাউডে জমা হয়েছে (অ্যাডমিন অনুমোদনের অপেক্ষায়)" else "প্রোডাক্ট সফলভাবে জমা দেওয়া হয়েছে")
                 syncManager.triggerSync()
                 onSuccess()
 
