@@ -679,10 +679,15 @@ class BusinessRepository(
 
     fun isAuthorizedAdminEmail(email: String): Boolean {
         val clean = email.trim().lowercase()
-        return clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
+        return clean == "buddavaibinodon@gmail.com" ||
+               clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
                clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
                clean == "ataulgonee786@gmail.com" || clean == "ataurpos@gmail.com" ||
                clean == "ataur50305@gmail.com" || clean == "a48268993@gmail.com"
+    }
+
+    fun isAuthorizedSuperAdminEmail(email: String): Boolean {
+        return isAuthorizedAdminEmail(email)
     }
 
     suspend fun updateAdminSecurityCredentials(

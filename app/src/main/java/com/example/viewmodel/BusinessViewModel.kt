@@ -972,6 +972,23 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
      * 2. Verifies user belongs to an authorized business and has an assigned role.
      * 3. Rejects unknown/unauthorized Google accounts.
      */
+    fun isSuperAdminUser(): Boolean {
+        val user = _currentUser.value
+        if (user?.role == UserRole.SUPER_ADMIN) return true
+        if (user?.role != UserRole.ADMIN) return false
+        val fbEmail = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email } catch (_: Exception) { null }
+        return repository.isAuthorizedSuperAdminEmail(fbEmail ?: "")
+    }
+
+    fun getSuperAdminEmail(): String {
+        return try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() }
+                ?: "ataurgonee4@gmail.com"
+        } catch (_: Exception) {
+            "ataurgonee4@gmail.com"
+        }
+    }
+
     /**
      * Authenticate or map an authenticated Firebase User into the local business role.
      */

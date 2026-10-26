@@ -23,6 +23,8 @@ import com.example.ui.screens.*
 import com.example.ui.theme.PrimaryNavy
 import com.example.ui.theme.SmartBusinessTheme
 import com.example.viewmodel.BusinessViewModel
+import com.example.viewmodel.SuperAdminViewModel
+import androidx.compose.ui.platform.LocalContext
 
 enum class AppScreen {
     LOGIN,
@@ -52,11 +54,15 @@ enum class AppScreen {
     ADMIN_ALERT,
     SALESMAN_ALERT,
     ADMIN_STOCK_CONTROL,
-    SALESMAN_STOCK_VERIFICATION
+    SALESMAN_STOCK_VERIFICATION,
+    SUPER_ADMIN_DASHBOARD
 }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: BusinessViewModel by viewModels()
+    private val superAdminViewModel: SuperAdminViewModel by viewModels {
+        SuperAdminViewModel.provideFactory(application)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,14 +86,21 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SmartBusinessTheme {
-                SmartBusinessApp(viewModel = viewModel)
+                SmartBusinessApp(
+                    viewModel = viewModel,
+                    superAdminViewModel = superAdminViewModel
+                )
             }
         }
     }
 }
 
 @Composable
-fun SmartBusinessApp(viewModel: BusinessViewModel) {
+fun SmartBusinessApp(
+    viewModel: BusinessViewModel,
+    superAdminViewModel: SuperAdminViewModel? = null
+) {
+    val context = LocalContext.current
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     var currentScreen by remember { mutableStateOf(AppScreen.LOGIN) }
 
@@ -114,7 +127,8 @@ fun SmartBusinessApp(viewModel: BusinessViewModel) {
                 AppScreen.AUDIT_LOGS,
                 AppScreen.ADMIN_PRODUCT_APPROVAL,
                 AppScreen.COMPANY_DUE,
-                AppScreen.DATA_PROTECTION_CENTER
+                AppScreen.DATA_PROTECTION_CENTER,
+                AppScreen.SUPER_ADMIN_DASHBOARD
             )
             if (role != UserRole.ADMIN && currentScreen in adminOnlyScreens) {
                 currentScreen = AppScreen.SALESMAN_DASHBOARD
@@ -232,7 +246,8 @@ fun SmartBusinessApp(viewModel: BusinessViewModel) {
                             onNavigateToDataProtectionCenter = { currentScreen = AppScreen.DATA_PROTECTION_CENTER },
                             onNavigateToReminders = { currentScreen = AppScreen.SMART_REMINDER },
                             onNavigateToSalesmanAlerts = { currentScreen = AppScreen.ADMIN_ALERT },
-                            onNavigateToStockControl = { currentScreen = AppScreen.ADMIN_STOCK_CONTROL }
+                            onNavigateToStockControl = { currentScreen = AppScreen.ADMIN_STOCK_CONTROL },
+                            onNavigateToSuperAdmin = { currentScreen = AppScreen.SUPER_ADMIN_DASHBOARD }
                         )
                     }
                 }
@@ -577,6 +592,35 @@ fun SmartBusinessApp(viewModel: BusinessViewModel) {
                             currentScreen = if (currentUser?.role == UserRole.ADMIN) AppScreen.ADMIN_DASHBOARD else AppScreen.SALESMAN_DASHBOARD
                         }
                     )
+                }
+
+                AppScreen.SUPER_ADMIN_DASHBOARD -> {
+                    androidx.activity.compose.BackHandler {
+                        currentScreen = AppScreen.ADMIN_DASHBOARD
+                    }
+                    if (!viewModel.isSuperAdminUser()) {
+                        LaunchedEffect(Unit) {
+                            Toast.makeText(
+                                context,
+                                "অননুমোদিত প্রবেশাধিকার! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন প্রবেশ করতে পারবেন।",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            currentScreen = AppScreen.ADMIN_DASHBOARD
+                        }
+                    } else {
+                        val activeSuperAdminVm = superAdminViewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(
+                            factory = SuperAdminViewModel.provideFactory(
+                                context.applicationContext as android.app.Application
+                            )
+                        )
+                        SuperAdminDashboardScreen(
+                            currentSuperAdminEmail = viewModel.getSuperAdminEmail(),
+                            onBackToStoreAdmin = {
+                                currentScreen = AppScreen.ADMIN_DASHBOARD
+                            },
+                            viewModel = activeSuperAdminVm
+                        )
+                    }
                 }
             }
         }

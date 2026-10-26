@@ -60,7 +60,8 @@ fun AdminDashboardScreen(
     onNavigateToDataProtectionCenter: () -> Unit = {},
     onNavigateToReminders: () -> Unit = {},
     onNavigateToSalesmanAlerts: () -> Unit = {},
-    onNavigateToStockControl: () -> Unit = {}
+    onNavigateToStockControl: () -> Unit = {},
+    onNavigateToSuperAdmin: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val summary by viewModel.adminDashboardSummary.collectAsStateWithLifecycle()
@@ -585,6 +586,61 @@ fun AdminDashboardScreen(
                                 Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AccentAmber)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Super Admin Entry Banner (Only shown if current authenticated user has platform super admin privileges)
+        if (viewModel.isSuperAdminUser()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable { onNavigateToSuperAdmin() }
+                        .testTag("btn_super_admin_portal"),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A237E)),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFD54F)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF1A237E), modifier = Modifier.size(24.dp))
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "প্ল্যাটফর্ম সুপার এডমিন প্যানেল",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(color = Color(0xFFFFD54F), shape = RoundedCornerShape(4.dp)) {
+                                    Text("OWNER", color = Color(0xFF1A237E), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "সকল দোকানের সাবস্ক্রিপশন, পেমেন্ট ও প্ল্যাটফর্ম নিয়ন্ত্রণ",
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, tint = Color(0xFFFFD54F))
                     }
                 }
             }

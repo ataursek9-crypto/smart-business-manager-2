@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class UserRole {
-    ADMIN, SALESMAN
+    ADMIN, SALESMAN, SUPER_ADMIN
 }
 
 enum class UserAccountStatus {

@@ -26,6 +26,7 @@ service cloud.firestore {
     function isMasterAdminEmail() {
       return isSignedIn() && request.auth.token.email != null &&
         request.auth.token.email.lower() in [
+          'buddavaibinodon@gmail.com',
           'ataursek9@gmail.com',
           'ataurgonee4@gmail.com',
           'support@smartbiz.local',
@@ -35,6 +36,12 @@ service cloud.firestore {
           'ataur50305@gmail.com',
           'a48268993@gmail.com'
         ];
+    }
+
+    function isSuperAdmin() {
+      return isMasterAdminEmail() ||
+        (exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == true);
     }
 
     // Business ownership / staff helper
@@ -145,13 +152,14 @@ service cloud.firestore {
 
     // Business Scope Root
     match /businesses/{businessId} {
-      allow get: if isSignedIn();
+      allow get: if isSuperAdmin() || isSignedIn();
+      allow list: if isSuperAdmin();
       allow create: if isSignedIn() && (
         request.auth.uid == businessId ||
         incoming().ownerUid == request.auth.uid ||
         isBusinessOwner(businessId)
       );
-      allow update, delete: if isBusinessOwner(businessId);
+      allow update, delete: if isSuperAdmin() || isBusinessOwner(businessId);
 
       // 1. Products
       match /products/{productId} {
@@ -248,6 +256,49 @@ service cloud.firestore {
         request.auth.uid == userId ||
         (resource != null && 'businessId' in resource.data && request.auth.uid == resource.data.businessId)
       );
+    }
+
+    // 9. Platform Plans (Readable by authenticated users, manageable by Super Admin)
+    match /platform_plans/{planId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // 10. Platform Subscriptions
+    match /platform_subscriptions/{subId} {
+      allow get: if isSuperAdmin() || (isSignedIn() && resource != null && 'businessId' in resource.data && isBusinessStaff(resource.data.businessId));
+      allow list: if isSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // 11. Platform Payments (Created by shop staff, verified and managed by Super Admin)
+    match /platform_payments/{paymentId} {
+      allow get: if isSuperAdmin() || (isSignedIn() && resource != null && 'businessId' in resource.data && isBusinessStaff(resource.data.businessId));
+      allow list: if isSuperAdmin();
+      allow create: if isSignedIn() && incoming().businessId is string && isBusinessStaff(incoming().businessId);
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // 12. Platform Audit Logs (Strictly immutable, created & read only by Super Admin)
+    match /platform_audit_logs/{logId} {
+      allow get, list: if isSuperAdmin();
+      allow create: if isSuperAdmin();
+      allow update, delete: if false;
+    }
+
+    // 13. Platform Global Settings
+    match /platform_settings/{settingId} {
+      allow get: if isSignedIn();
+      allow list: if isSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // 14. Platform Super Admin Registry
+    match /platform_superadmins/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
   }
 }
