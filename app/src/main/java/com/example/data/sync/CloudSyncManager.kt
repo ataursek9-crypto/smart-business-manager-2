@@ -738,6 +738,96 @@ class CloudSyncManager(
     }
 
     /**
+     * Updates product active status (soft-delete / restore) directly in Cloud Firestore.
+     */
+    suspend fun updateProductActiveStatusInCloud(productId: String, isActive: Boolean, businessId: String? = null) {
+        if (!isCloudBackendConfigured() || productId.isBlank()) return
+        val bizId = businessId?.trim()?.ifBlank { null } ?: try { resolveOrFetchBusinessId() } catch (_: Exception) {
+            CloudBusinessAuth.getStoredBusinessId(context) ?: ""
+        }
+        if (bizId.isBlank()) return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            firestore.collection("businesses").document(bizId)
+                .collection("products").document(productId)
+                .update(
+                    mapOf(
+                        "isActive" to isActive,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
+                ).awaitResult()
+            Log.i(TAG, "updateProductActiveStatusInCloud: Product $productId marked isActive=$isActive on /businesses/$bizId/products")
+        } catch (e: Exception) {
+            Log.w(TAG, "updateProductActiveStatusInCloud non-fatal note: ${e.message}")
+        }
+    }
+
+    /**
+     * Permanently deletes a record document from Cloud Firestore and writes a permanent Tombstone marker.
+     */
+    suspend fun permanentlyDeleteCloudRecord(
+        tableName: String,
+        originalId: String,
+        tombstoneId: String,
+        deletedByUserId: String,
+        businessId: String? = null
+    ) {
+        if (!isCloudBackendConfigured() || tableName.isBlank() || originalId.isBlank()) return
+        val bizId = businessId?.trim()?.ifBlank { null } ?: try { resolveOrFetchBusinessId() } catch (_: Exception) {
+            CloudBusinessAuth.getStoredBusinessId(context) ?: ""
+        }
+        if (bizId.isBlank()) return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val batch = firestore.batch()
+
+            // 1. Delete document from target collection
+            val targetDocRef = firestore.collection("businesses").document(bizId)
+                .collection(tableName).document(originalId)
+            batch.delete(targetDocRef)
+
+            // 2. Write permanent Tombstone marker
+            val tombstoneRef = firestore.collection("businesses").document(bizId)
+                .collection("tombstones").document(tombstoneId)
+            val tombstoneData = mapOf(
+                "id" to tombstoneId,
+                "tableName" to tableName,
+                "originalId" to originalId,
+                "deletedAt" to System.currentTimeMillis(),
+                "isPermanent" to true,
+                "deletedByUserId" to deletedByUserId,
+                "businessId" to bizId
+            )
+            batch.set(tombstoneRef, tombstoneData, SetOptions.merge())
+
+            batch.commit().awaitResult()
+            Log.i(TAG, "permanentlyDeleteCloudRecord: Deleted /businesses/$bizId/$tableName/$originalId and created tombstone $tombstoneId")
+        } catch (e: Exception) {
+            Log.w(TAG, "permanentlyDeleteCloudRecord non-fatal note: ${e.message}")
+        }
+    }
+
+    /**
+     * Removes a Tombstone marker from Cloud Firestore upon item restoration.
+     */
+    suspend fun removeCloudTombstone(tombstoneId: String, businessId: String? = null) {
+        if (!isCloudBackendConfigured() || tombstoneId.isBlank()) return
+        val bizId = businessId?.trim()?.ifBlank { null } ?: try { resolveOrFetchBusinessId() } catch (_: Exception) {
+            CloudBusinessAuth.getStoredBusinessId(context) ?: ""
+        }
+        if (bizId.isBlank()) return
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            firestore.collection("businesses").document(bizId)
+                .collection("tombstones").document(tombstoneId)
+                .delete().awaitResult()
+            Log.i(TAG, "removeCloudTombstone: Removed /businesses/$bizId/tombstones/$tombstoneId")
+        } catch (e: Exception) {
+            Log.w(TAG, "removeCloudTombstone non-fatal note: ${e.message}")
+        }
+    }
+
+    /**
      * Triggers an offline-first sync cycle.
      * If cloud backend is configured, it performs real bidirectional Firestore sync.
      * If cloud backend is pending setup, it safely records local counts without reporting false sync success.
@@ -972,16 +1062,30 @@ class CloudSyncManager(
         if (!isSalesman) {
             val localTombstones = db.recycleBinDao().getSyncTombstones()
             for (item in localTombstones) {
+                val isPerm = item.itemType == "PERMANENT_TOMBSTONE" || item.deleteReason.contains("Tombstone", ignoreCase = true)
+                val tombId = "tomb_${item.originalTable}_${item.originalId}"
                 val tombstone = Tombstone(
-                    id = item.id,
+                    id = tombId,
                     tableName = item.originalTable,
                     originalId = item.originalId,
                     deletedAt = item.deletedAt,
-                    isPermanent = item.deleteReason.contains("Tombstone", ignoreCase = true),
+                    isPermanent = isPerm,
                     deletedByUserId = item.deletedByAdminId
                 )
                 val data = mapTombstoneToCloud(tombstone, businessId)
                 collection.document(tombstone.id).set(data, SetOptions.merge()).awaitResult()
+
+                // If permanent tombstone, also ensure the document in the target collection is deleted from Firestore
+                if (isPerm) {
+                    try {
+                        firestore.collection("businesses").document(businessId)
+                            .collection(item.originalTable).document(item.originalId)
+                            .delete().awaitResult()
+                        Log.i(TAG, "Tombstone sync: Deleted /businesses/$businessId/${item.originalTable}/${item.originalId} from Firestore")
+                    } catch (delEx: Exception) {
+                        Log.w(TAG, "Tombstone sync doc delete non-fatal note: ${delEx.message}")
+                    }
+                }
             }
         }
 
@@ -991,6 +1095,7 @@ class CloudSyncManager(
             val origTable = doc.getString("tableName") ?: continue
             val origId = doc.getString("originalId") ?: continue
             val tombId = doc.id
+            val isPermanent = doc.getBoolean("isPermanent") ?: false
             val existing = db.recycleBinDao().getItemByOriginalId(origTable, origId)
             if (existing == null) {
                 db.recycleBinDao().insertItem(
@@ -999,16 +1104,31 @@ class CloudSyncManager(
                         originalTable = origTable,
                         originalId = origId,
                         itemName = "মুছে ফেলা রেকর্ড ($origTable #$origId)",
-                        itemType = "TOMBSTONE",
+                        itemType = if (isPermanent) "PERMANENT_TOMBSTONE" else "TOMBSTONE",
                         itemDetails = "ক্লাউড থেকে প্রাপ্ত টম্বস্টোন",
                         snapshotJson = "{}",
                         deletedByAdminId = doc.getString("deletedByUserId") ?: "",
                         deletedByAdminName = "Remote Device",
-                        deleteReason = "ক্লাউড টম্বস্টোন সিঙ্ক",
+                        deleteReason = if (isPermanent) "PERMANENT_TOMBSTONE" else "ক্লাউড টম্বস্টোন সিঙ্ক",
                         deletedAt = doc.getLong("deletedAt") ?: System.currentTimeMillis(),
                         isRestored = false
                     )
                 )
+                // If it's permanent, delete the local record immediately from Room as well!
+                if (isPermanent && origTable == "products") {
+                    db.productDao().deleteProductPermanently(origId)
+                }
+            } else if (isPermanent && existing.itemType != "PERMANENT_TOMBSTONE") {
+                db.recycleBinDao().updateItem(
+                    existing.copy(
+                        itemType = "PERMANENT_TOMBSTONE",
+                        deleteReason = "PERMANENT_TOMBSTONE",
+                        isRestored = false
+                    )
+                )
+                if (origTable == "products") {
+                    db.productDao().deleteProductPermanently(origId)
+                }
             }
         }
     }
@@ -1059,6 +1179,10 @@ class CloudSyncManager(
                 db.productDao().updateProduct(merged)
             }
         } else {
+            // If the product does not exist locally and remote isActive is false, do not insert it into active stock
+            if (!isActive) {
+                return
+            }
             val newProduct = Product(
                 id = id,
                 name = name,
@@ -1089,6 +1213,10 @@ class CloudSyncManager(
             val localProducts = db.productDao().getSyncProducts()
             for (product in localProducts) {
                 if (product.isTestData) continue
+                val tomb = db.recycleBinDao().getItemByOriginalId("products", product.id)
+                if (tomb != null && !tomb.isRestored && tomb.itemType == "PERMANENT_TOMBSTONE") {
+                    continue
+                }
                 val data = mapProductToCloud(product, businessId, isSalesman = false)
                 collection.document(product.id).set(data, SetOptions.merge()).awaitResult()
             }

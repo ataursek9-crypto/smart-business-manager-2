@@ -1897,7 +1897,9 @@ class BusinessRepository(
                         db.expenseDao().deleteExpensePermanently(item.originalId)
                     }
                 }
-                db.recycleBinDao().deleteItemById(item.id)
+                // Mark as PERMANENT_TOMBSTONE so it leaves the active Recycle Bin UI
+                // but persists as an offline tombstone marker to block sync resurrection
+                db.recycleBinDao().markPermanentlyDeleted(item.originalTable, item.originalId)
                 db.auditLogDao().insertAuditLog(
                     AuditLog(
                         userId = admin.id,

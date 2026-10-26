@@ -2326,7 +2326,17 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val result = repository.softDeleteProduct(product, admin, reason)
             if (result.isSuccess) {
+                // Direct cloud update to soft-delete (isActive = false) across all devices
+                if (syncManager.isCloudBackendConfigured()) {
+                    try {
+                        val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
+                        syncManager.updateProductActiveStatusInCloud(product.id, false, bizId)
+                    } catch (e: Exception) {
+                        Log.w("SoftDelete", "Cloud soft-delete will reconcile during sync: ${e.message}")
+                    }
+                }
                 _toastMessage.emit("পণ্য '${product.name}' রিসাইকেল বিনে পাঠানো হয়েছে ✅ (৩০ দিন নিরাপদ)")
+                syncManager.triggerSync()
                 onSuccess()
             } else {
                 onError(result.exceptionOrNull()?.message ?: "পণ্য অপসারণ ব্যর্থ হয়েছে")
@@ -2468,8 +2478,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val res = repository.restoreRecycleBinItem(item, admin)
             if (res.isSuccess) {
+                // Direct cloud update upon restore
+                if (syncManager.isCloudBackendConfigured()) {
+                    try {
+                        val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
+                        if (item.originalTable == "products") {
+                            syncManager.updateProductActiveStatusInCloud(item.originalId, true, bizId)
+                            syncManager.removeCloudTombstone("tomb_${item.originalTable}_${item.originalId}", bizId)
+                        }
+                    } catch (e: Exception) {
+                        Log.w("Restore", "Cloud restore will reconcile during sync: ${e.message}")
+                    }
+                }
                 scanTestDueCustomers()
                 _toastMessage.emit("'${item.itemName}' সফলভাবে পুনরুদ্ধার করা হয়েছে! ✅")
+                syncManager.triggerSync()
                 onSuccess()
             } else {
                 onError(res.exceptionOrNull()?.message ?: "পুনরুদ্ধার ব্যর্থ হয়েছে")
@@ -2490,8 +2513,24 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val res = repository.permanentlyDeleteRecycleBinItem(item, admin, pin)
             if (res.isSuccess) {
+                // Authoritative cloud permanent delete and tombstone recording
+                if (syncManager.isCloudBackendConfigured()) {
+                    try {
+                        val bizId = try { syncManager.resolveOrFetchBusinessId() } catch (_: Exception) { getActiveBusinessId() }
+                        syncManager.permanentlyDeleteCloudRecord(
+                            tableName = item.originalTable,
+                            originalId = item.originalId,
+                            tombstoneId = "tomb_${item.originalTable}_${item.originalId}",
+                            deletedByUserId = admin.id,
+                            businessId = bizId
+                        )
+                    } catch (e: Exception) {
+                        Log.w("PermanentDelete", "Cloud permanent delete will reconcile during sync: ${e.message}")
+                    }
+                }
                 scanTestDueCustomers()
                 _toastMessage.emit("'${item.itemName}' স্থায়ীভাবে মুছে ফেলা হয়েছে")
+                syncManager.triggerSync()
                 onSuccess()
             } else {
                 onError(res.exceptionOrNull()?.message ?: "মুছে ফেলা ব্যর্থ হয়েছে")

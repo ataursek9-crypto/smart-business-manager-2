@@ -428,13 +428,13 @@ interface CompanyPaymentDao {
 
 @Dao
 interface RecycleBinDao {
-    @Query("SELECT * FROM recycle_bin WHERE isRestored = 0 ORDER BY deletedAt DESC")
+    @Query("SELECT * FROM recycle_bin WHERE isRestored = 0 AND itemType NOT IN ('PERMANENT_TOMBSTONE', 'TOMBSTONE') ORDER BY deletedAt DESC")
     fun getActiveRecycleBinItems(): Flow<List<RecycleBinItem>>
 
     @Query("SELECT * FROM recycle_bin ORDER BY deletedAt DESC")
     fun getAllRecycleBinItems(): Flow<List<RecycleBinItem>>
 
-    @Query("SELECT * FROM recycle_bin WHERE id = :id LIMIT 1")
+    @Query("SELECT * FROM recycle_bin WHERE id = :id AND itemType NOT IN ('PERMANENT_TOMBSTONE', 'TOMBSTONE') LIMIT 1")
     suspend fun getItemById(id: String): RecycleBinItem?
 
     @Query("SELECT * FROM recycle_bin WHERE originalTable = :table AND originalId = :origId LIMIT 1")
@@ -449,15 +449,18 @@ interface RecycleBinDao {
     @Query("UPDATE recycle_bin SET isRestored = 1, restoredAt = :restoredAt, restoredByAdminId = :adminId WHERE id = :id")
     suspend fun markRestored(id: String, adminId: String, restoredAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE recycle_bin SET itemType = 'PERMANENT_TOMBSTONE', deleteReason = 'PERMANENT_TOMBSTONE', isRestored = 0, deletedAt = :time WHERE originalTable = :table AND originalId = :origId")
+    suspend fun markPermanentlyDeleted(table: String, origId: String, time: Long = System.currentTimeMillis())
+
     @Delete
     suspend fun deleteItem(item: RecycleBinItem)
 
     @Query("DELETE FROM recycle_bin WHERE id = :id")
     suspend fun deleteItemById(id: String)
 
-    @Query("SELECT COUNT(*) FROM recycle_bin WHERE isRestored = 0")
+    @Query("SELECT COUNT(*) FROM recycle_bin WHERE isRestored = 0 AND itemType NOT IN ('PERMANENT_TOMBSTONE', 'TOMBSTONE')")
     fun getActiveCount(): Flow<Int>
 
-    @Query("SELECT * FROM recycle_bin WHERE isTestData = 0")
+    @Query("SELECT * FROM recycle_bin WHERE isRestored = 0")
     suspend fun getSyncTombstones(): List<RecycleBinItem>
 }
