@@ -663,26 +663,43 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             reminderManager.schedulePeriodicCheck()
             alertRepository.checkAndDispatchScheduledAlerts()
 
-            // Auto-restore Super Admin session if previously authenticated
+            // Auto-restore Super Admin session ONLY if previously authenticated with verified email
             try {
                 val authUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
                 val storedEmail = authUser?.email?.trim()?.lowercase() ?: CloudBusinessAuth.getStoredAuthEmail(application)
-                if (!storedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(storedEmail)) {
-                    _currentGoogleEmail.value = storedEmail
+                val isStoredSuperAdmin = CloudBusinessAuth.isStoredSuperAdmin(application)
+                if (isStoredSuperAdmin && !storedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(storedEmail)) {
                     val uid = authUser?.uid ?: "superadmin_${storedEmail.replace('@', '_').replace('.', '_')}"
                     val existing = repository.getUserById(uid)
-                    val superAdminUser = existing ?: User(
-                        id = uid,
-                        name = authUser?.displayName ?: "প্ল্যাটফর্ম সুপার এডমিন",
-                        phone = authUser?.phoneNumber ?: "01700000000",
-                        role = UserRole.ADMIN,
-                        pinHash = repository.hashPin("1234"),
-                        isActive = true,
-                        accountStatus = UserAccountStatus.ACTIVE
-                    )
-                    repository.saveUserDirect(superAdminUser)
-                    _activeBusinessId.value = uid
-                    _currentUser.value = superAdminUser
+                    if (existing == null || (existing.isActive && existing.accountStatus == UserAccountStatus.ACTIVE)) {
+                        _isSuperAdminSession.value = true
+                        _superAdminVerifiedEmail.value = storedEmail
+                        _superAdminUid.value = uid
+                        _currentGoogleEmail.value = storedEmail
+                        val superAdminUser = existing ?: User(
+                            id = uid,
+                            name = authUser?.displayName ?: "প্ল্যাটফর্ম সুপার এডমিন",
+                            phone = authUser?.phoneNumber ?: "01700000000",
+                            role = UserRole.ADMIN,
+                            pinHash = repository.hashPin("1234"),
+                            isActive = true,
+                            accountStatus = UserAccountStatus.ACTIVE
+                        )
+                        repository.saveUserDirect(superAdminUser)
+                        _activeBusinessId.value = uid
+                        _currentUser.value = superAdminUser
+                    } else {
+                        // User revoked or inactive
+                        _isSuperAdminSession.value = false
+                        _superAdminVerifiedEmail.value = null
+                        _superAdminUid.value = null
+                        CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
+                    }
+                } else {
+                    _isSuperAdminSession.value = false
+                    _superAdminVerifiedEmail.value = null
+                    _superAdminUid.value = null
+                    CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
                 }
             } catch (e: Exception) {
                 Log.w("BusinessViewModel", "Session auto-restore note: ${e.message}")
@@ -931,6 +948,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         onResult(false, "অননুমোদিত অ্যাকাউন্ট! এটি সাধারণ বিক্রয় কর্মীদের লগইন স্ক্রিন।")
                     } else {
                         _currentUser.value = auth.user
+                        _isSuperAdminSession.value = false
+                        _superAdminVerifiedEmail.value = null
+                        _superAdminUid.value = null
+                        _currentGoogleEmail.value = null
+                        CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
+                        CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
                         CloudBusinessAuth.setStoredRole(getApplication(), UserRole.SALESMAN.name)
                         val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
                         val bizId = when {
@@ -970,6 +993,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             when (val auth = repository.authenticateAdmin(phone, pin)) {
                 is BusinessRepository.AuthResult.Success -> {
                     _currentUser.value = auth.user
+                    _isSuperAdminSession.value = false
+                    _superAdminVerifiedEmail.value = null
+                    _superAdminUid.value = null
+                    _currentGoogleEmail.value = null
+                    CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
+                    CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
                     CloudBusinessAuth.setStoredRole(getApplication(), UserRole.ADMIN.name)
                     val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
                     val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
@@ -1093,6 +1122,14 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 // Register into SuperAdminRepository
                 superAdminRepo.registerNewShop(platformBiz)
 
+                // Reset Super Admin session & credentials: A newly registered shop owner is strictly a store admin, never platform super admin
+                _isSuperAdminSession.value = false
+                _superAdminVerifiedEmail.value = null
+                _superAdminUid.value = null
+                _currentGoogleEmail.value = null
+                CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
+                CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
+
                 // Store active business ID & role locally
                 CloudBusinessAuth.setStoredBusinessId(
                     context = getApplication(),
@@ -1122,13 +1159,23 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
     fun logout() {
         _currentUser.value = null
+        _currentGoogleEmail.value = null
+        _isSuperAdminSession.value = false
+        _superAdminVerifiedEmail.value = null
+        _superAdminUid.value = null
         CloudBusinessAuth.setStoredRole(getApplication(), null)
         CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
+        CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
         try {
             com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
         } catch (_: Exception) {}
         savedAccountManager.handleLogout()
     }
+
+    private val _isSuperAdminSession = MutableStateFlow(false)
+    val isSuperAdminSession: StateFlow<Boolean> = _isSuperAdminSession.asStateFlow()
+    private val _superAdminVerifiedEmail = MutableStateFlow<String?>(null)
+    private val _superAdminUid = MutableStateFlow<String?>(null)
 
     private val _currentGoogleEmail = MutableStateFlow<String?>(
         CloudBusinessAuth.getStoredAuthEmail(application)
@@ -1136,22 +1183,54 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     val currentGoogleEmail: StateFlow<String?> = _currentGoogleEmail.asStateFlow()
 
     fun isSuperAdminUser(): Boolean {
-        val user = _currentUser.value
-        if (user?.role == UserRole.SUPER_ADMIN) return true
-        val candidateEmail = _currentGoogleEmail.value?.takeIf { it.isNotBlank() }
-            ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
-            ?: CloudBusinessAuth.getStoredAuthEmail(getApplication())
-        if (!candidateEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(candidateEmail)) {
-            return true
+        val user = _currentUser.value ?: return false
+
+        // Inactive or suspended users can never be Super Admin
+        if (!user.isActive || user.accountStatus != UserAccountStatus.ACTIVE) {
+            return false
         }
-        return false
+
+        // Regular shop owners/staff have a shopId beginning with "biz_".
+        // They are strictly shop tenants, NOT the platform super admin!
+        if (user.shopId.isNotBlank() && user.shopId.startsWith("biz_")) {
+            return false
+        }
+
+        // Salesman role cannot be Super Admin
+        if (user.role == UserRole.SALESMAN) {
+            return false
+        }
+
+        // Only ADMIN or explicit SUPER_ADMIN roles can be considered
+        if (user.role != UserRole.ADMIN && user.role != UserRole.SUPER_ADMIN) {
+            return false
+        }
+
+        // Must have an active verified Super Admin session
+        if (!_isSuperAdminSession.value) {
+            return false
+        }
+
+        // The verified session email must strictly match authorized Super Admin emails
+        val verifiedEmail = _superAdminVerifiedEmail.value?.trim()?.lowercase()
+        if (verifiedEmail.isNullOrBlank() || !repository.isAuthorizedSuperAdminEmail(verifiedEmail)) {
+            return false
+        }
+
+        // The user ID must match the verified Super Admin session UID
+        val verifiedUid = _superAdminUid.value
+        if (!verifiedUid.isNullOrBlank() && user.id != verifiedUid) {
+            return false
+        }
+
+        return true
     }
 
     fun getSuperAdminEmail(): String {
-        return _currentGoogleEmail.value?.takeIf { it.isNotBlank() }
-            ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
-            ?: CloudBusinessAuth.getStoredAuthEmail(getApplication())
-            ?: "ataurgonee4@gmail.com"
+        if (!isSuperAdminUser()) return ""
+        return _superAdminVerifiedEmail.value?.takeIf { it.isNotBlank() }
+            ?: _currentGoogleEmail.value?.takeIf { it.isNotBlank() && repository.isAuthorizedSuperAdminEmail(it) }
+            ?: ""
     }
 
     /**
@@ -1189,14 +1268,16 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             val cleanEmail = email?.trim()?.lowercase() ?: ""
             val name = displayName ?: "গুগল ব্যবহারকারী"
 
-            if (cleanEmail.isNotBlank()) {
-                _currentGoogleEmail.value = cleanEmail
-                CloudBusinessAuth.setStoredAuthEmail(getApplication(), cleanEmail)
-            }
-
             // Step 1: Check if this Google account is an AUTHORIZED PLATFORM SUPER ADMIN
             val isSuperAdmin = cleanEmail.isNotBlank() && repository.isAuthorizedSuperAdminEmail(cleanEmail)
             if (isSuperAdmin) {
+                _isSuperAdminSession.value = true
+                _superAdminVerifiedEmail.value = cleanEmail
+                _superAdminUid.value = uid
+                _currentGoogleEmail.value = cleanEmail
+                CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), true)
+                CloudBusinessAuth.setStoredAuthEmail(getApplication(), cleanEmail)
+
                 val existing = repository.getUserById(uid)
                 val superAdminUser = if (existing != null) {
                     existing.copy(
@@ -1239,6 +1320,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 triggerSync()
                 return@launch
             }
+
+            // Non-superadmin Google account: explicitly disable Super Admin privileges
+            _isSuperAdminSession.value = false
+            _superAdminVerifiedEmail.value = null
+            _superAdminUid.value = null
+            CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
 
             // 2. Check if user already exists in Room by Firebase UID
             val existingUserByUid = repository.getUserById(uid)

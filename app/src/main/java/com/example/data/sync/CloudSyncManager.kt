@@ -1851,6 +1851,22 @@ object CloudBusinessAuth {
     private const val KEY_BUSINESS_NAME = "active_cloud_business_name"
     private const val KEY_USER_ROLE = "active_cloud_user_role"
     private const val KEY_AUTH_EMAIL = "active_cloud_auth_email"
+    private const val KEY_IS_SUPER_ADMIN = "active_cloud_is_super_admin"
+
+    fun isStoredSuperAdmin(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_IS_SUPER_ADMIN, false)
+    }
+
+    fun setStoredSuperAdminFlag(context: Context, isSuperAdmin: Boolean) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        if (isSuperAdmin) {
+            editor.putBoolean(KEY_IS_SUPER_ADMIN, true)
+        } else {
+            editor.remove(KEY_IS_SUPER_ADMIN)
+        }
+        editor.apply()
+    }
 
     fun getStoredAuthEmail(context: Context): String? {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

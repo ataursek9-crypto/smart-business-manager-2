@@ -129,10 +129,12 @@ fun SmartBusinessApp(
                 AppScreen.AUDIT_LOGS,
                 AppScreen.ADMIN_PRODUCT_APPROVAL,
                 AppScreen.COMPANY_DUE,
-                AppScreen.DATA_PROTECTION_CENTER,
-                AppScreen.SUPER_ADMIN_DASHBOARD
+                AppScreen.DATA_PROTECTION_CENTER
             )
-            if (role != UserRole.ADMIN && !isSuperAdmin && currentScreen in adminOnlyScreens) {
+            // Strict Platform Super Admin Protection: regular shop admins and salesmen are never allowed in SUPER_ADMIN_DASHBOARD
+            if (currentScreen == AppScreen.SUPER_ADMIN_DASHBOARD && !isSuperAdmin) {
+                currentScreen = if (role == UserRole.ADMIN) AppScreen.ADMIN_DASHBOARD else AppScreen.SALESMAN_DASHBOARD
+            } else if (role != UserRole.ADMIN && !isSuperAdmin && currentScreen in adminOnlyScreens) {
                 currentScreen = AppScreen.SALESMAN_DASHBOARD
             } else if (currentScreen == AppScreen.LOGIN || currentScreen == AppScreen.ADMIN_LOGIN) {
                 currentScreen = if (isSuperAdmin) {
@@ -625,7 +627,7 @@ fun SmartBusinessApp(
 
                 AppScreen.SUPER_ADMIN_DASHBOARD -> {
                     androidx.activity.compose.BackHandler {
-                        currentScreen = AppScreen.ADMIN_DASHBOARD
+                        currentScreen = if (currentUser?.role == UserRole.ADMIN) AppScreen.ADMIN_DASHBOARD else AppScreen.SALESMAN_DASHBOARD
                     }
                     if (!viewModel.isSuperAdminUser()) {
                         LaunchedEffect(Unit) {
@@ -634,7 +636,7 @@ fun SmartBusinessApp(
                                 "অননুমোদিত প্রবেশাধিকার! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন প্রবেশ করতে পারবেন।",
                                 Toast.LENGTH_LONG
                             ).show()
-                            currentScreen = AppScreen.ADMIN_DASHBOARD
+                            currentScreen = if (currentUser?.role == UserRole.ADMIN) AppScreen.ADMIN_DASHBOARD else AppScreen.SALESMAN_DASHBOARD
                         }
                     } else {
                         val activeSuperAdminVm = superAdminViewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(

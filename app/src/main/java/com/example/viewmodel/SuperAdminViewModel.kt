@@ -146,6 +146,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.updateBusinessStatus(
@@ -175,6 +179,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.updateBusinessStatus(
@@ -206,6 +214,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.updateBusinessPlan(
@@ -239,6 +251,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.sendSubscriptionNotice(
@@ -272,6 +288,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.schedulePolicyChange(
@@ -303,6 +323,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.reviewPayment(
@@ -335,6 +359,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.savePlan(plan, actorUid, actorName, actorEmail)
@@ -357,6 +385,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
         actorName: String,
         actorEmail: String
     ) {
+        if (!SuperAdminRepository.isSuperAdminEmail(actorEmail)) {
+            _uiState.update { it.copy(errorMessage = "অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val res = repository.updateSettings(newSettings, actorUid, actorName, actorEmail)

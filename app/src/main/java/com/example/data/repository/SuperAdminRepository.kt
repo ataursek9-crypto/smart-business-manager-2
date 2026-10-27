@@ -577,6 +577,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val currentList = _businesses.value.toMutableList()
         val index = currentList.indexOfFirst { it.id == businessId }
         if (index == -1) {
@@ -639,6 +642,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val plan = _plans.value.find { it.id == planId }
             ?: return Result.failure(IllegalArgumentException("নির্বাচিত প্ল্যানটি পাওয়া যায়নি!"))
 
@@ -707,6 +713,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val currentPayments = _payments.value.toMutableList()
         val index = currentPayments.indexOfFirst { it.id == paymentId }
         if (index == -1) {
@@ -790,6 +799,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val currentPlans = _plans.value.toMutableList()
         val index = currentPlans.indexOfFirst { it.id == plan.id }
         if (index >= 0) {
@@ -866,6 +878,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         _settings.value = newSettings
         recordAuditLog(
             actorUid = actorUid,
@@ -968,6 +983,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val currentList = _businesses.value.toMutableList()
         val index = currentList.indexOfFirst { it.id == businessId }
         if (index == -1) {
@@ -1037,6 +1055,9 @@ class SuperAdminRepository(
         actorName: String,
         actorEmail: String
     ): Result<Unit> {
+        if (!isSuperAdminEmail(actorEmail)) {
+            return Result.failure(SecurityException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র প্ল্যাটফর্ম সুপার এডমিন এই অপারেশন সম্পাদন করতে পারেন।"))
+        }
         val currentList = _businesses.value.toMutableList()
         val index = currentList.indexOfFirst { it.id == businessId }
         if (index == -1) {
