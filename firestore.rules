@@ -151,14 +151,32 @@ service cloud.firestore {
              (!('isPermanent' in data) || data.isPermanent is bool);
     }
 
+    function isValidNewShopRegistration(data, businessId) {
+      return (data.id == businessId || !('id' in data)) &&
+             (
+               (data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200) ||
+               (data.name is string && data.name.size() > 0 && data.name.size() <= 200)
+             ) &&
+             (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 100)) &&
+             (
+               (data.ownerPhone is string && data.ownerPhone.size() >= 11 && data.ownerPhone.size() <= 20) ||
+               (data.phone is string && data.phone.size() >= 11 && data.phone.size() <= 20)
+             ) &&
+             (!('status' in data) || data.status == 'ACTIVE') &&
+             (!('planId' in data) || data.planId == 'plan_free') &&
+             (!('subscriptionStatus' in data) || data.subscriptionStatus == 'ACTIVE');
+    }
+
     // Business Scope Root
     match /businesses/{businessId} {
-      allow get: if isSuperAdmin() || isSignedIn();
+      allow get: if isSuperAdmin() || (isSignedIn() && isBusinessStaff(businessId));
       allow list: if isSuperAdmin();
-      allow create: if isSignedIn() && (
+      allow create: if (isSignedIn() && (
         request.auth.uid == businessId ||
         incoming().ownerUid == request.auth.uid ||
         isBusinessOwner(businessId)
+      )) || (
+        isValidNewShopRegistration(incoming(), businessId)
       );
       allow update, delete: if isSuperAdmin() || isBusinessOwner(businessId);
 

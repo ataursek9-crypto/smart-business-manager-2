@@ -1080,7 +1080,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     .replace('৩', '3').replace('৪', '4').replace('৫', '5')
                     .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
 
-                // Check duplicate in Super Admin businesses state
+                // Check duplicate in Super Admin businesses state and Cloud Firestore
                 val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
                 val existingInSuperAdmin = superAdminRepo.businesses.value.any {
                     it.ownerPhone == normalizedPhone
@@ -1089,6 +1089,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 if (existingInSuperAdmin) {
                     onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
                     return@launch
+                }
+
+                if (superAdminRepo.isFirebaseConfigured()) {
+                    try {
+                        val querySnapshot = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                            .collection("businesses")
+                            .whereEqualTo("ownerPhone", normalizedPhone)
+                            .limit(1)
+                            .get()
+                            .await()
+                        if (!querySnapshot.isEmpty) {
+                            onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
+                            return@launch
+                        }
+                    } catch (_: Exception) {}
                 }
 
                 // Generate unique Shop ID for platform and local database isolation
@@ -1137,7 +1152,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     notes = "নতুন দোকানদার স্ব-নিবন্ধন (ডিফল্ট আজীবন ফ্রি)"
                 )
 
-                // Register into SuperAdminRepository
+                // Register into SuperAdminRepository and sync directly to Cloud Firestore backend
                 superAdminRepo.registerNewShop(platformBiz)
 
                 // Link Google credentials if provided
@@ -1170,8 +1185,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 _currentUser.value = newAdmin
 
                 try {
-                    if (syncManager.isCloudBackendConfigured()) {
-                        syncManager.ensureBusinessDocExists(shopId, newAdmin.id)
+                    if (superAdminRepo.isFirebaseConfigured() || syncManager.isCloudBackendConfigured()) {
+                        syncManager.ensureBusinessDocExists(shopId, newAdmin.id, shopName.trim())
                         syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
                     }
                 } catch (e: Exception) {

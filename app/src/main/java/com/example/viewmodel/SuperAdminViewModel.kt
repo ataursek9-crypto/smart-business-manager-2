@@ -137,6 +137,31 @@ class SuperAdminViewModel @JvmOverloads constructor(
     }
 
     /**
+     * Actively fetches all registered shops from Cloud Firestore backend and merges into UI state.
+     */
+    fun refreshBusinesses(onComplete: ((Boolean, String) -> Unit)? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            repository.startRemoteListeners()
+            val result = repository.refreshBusinessesFromRemote()
+            val msg = if (result.isSuccess) {
+                val count = result.getOrNull()?.size ?: repository.businesses.value.size
+                "ক্লাউড থেকে $count টি দোকানের তথ্য সফলভাবে আপডেট হয়েছে।"
+            } else {
+                result.exceptionOrNull()?.message ?: "দোকানের তথ্য লোড করতে সমস্যা হয়েছে।"
+            }
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    successMessage = if (result.isSuccess) msg else null,
+                    errorMessage = if (result.isFailure) msg else null
+                )
+            }
+            onComplete?.invoke(result.isSuccess, msg)
+        }
+    }
+
+    /**
      * Suspend a business with reason and audit log.
      */
     fun suspendBusiness(

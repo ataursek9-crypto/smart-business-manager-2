@@ -149,6 +149,11 @@ fun SuperAdminDashboardScreen(
         }
     }
 
+    // Auto-refresh businesses from Cloud Firestore on entry
+    LaunchedEffect(Unit) {
+        viewModel.refreshBusinesses()
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -183,6 +188,16 @@ fun SuperAdminDashboardScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { viewModel.refreshBusinesses() },
+                        modifier = Modifier.testTag("super_admin_refresh_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "দোকানের তালিকা রিফ্রেশ করুন",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     OutlinedButton(
                         onClick = onBackToStoreAdmin,
                         modifier = Modifier.padding(end = 8.dp)

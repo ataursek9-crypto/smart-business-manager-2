@@ -269,9 +269,17 @@ class SuperAdminRepository(
         initRemoteListeners()
     }
 
-    private fun isFirebaseConfigured(): Boolean {
+    fun isFirebaseConfigured(): Boolean {
         return try {
-            FirebaseApp.getApps(context).isNotEmpty() && FirebaseAuth.getInstance().currentUser != null
+            FirebaseApp.getApps(context).isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun isUserSignedIn(): Boolean {
+        return try {
+            FirebaseAuth.getInstance().currentUser != null
         } catch (_: Exception) {
             false
         }
@@ -401,8 +409,12 @@ class SuperAdminRepository(
         _auditLogs.value = seedLogs
     }
 
+    private var businessesListenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+
     @androidx.annotation.VisibleForTesting
     fun resetStateForTesting() {
+        businessesListenerRegistration?.remove()
+        businessesListenerRegistration = null
         _sharedBusinesses.value = emptyList()
         _sharedPayments.value = emptyList()
         _sharedAuditLogs.value = emptyList()
@@ -413,80 +425,138 @@ class SuperAdminRepository(
         seedInitialPlatformData()
     }
 
+    fun parseBusinessDoc(doc: com.google.firebase.firestore.DocumentSnapshot): PlatformBusiness? {
+        return try {
+            val id = doc.id
+            val name = doc.getString("name") ?: doc.getString("businessName") ?: "ব্যবসা #$id"
+            val ownerUid = doc.getString("ownerUid") ?: id
+            val ownerName = doc.getString("ownerName") ?: "অ্যাডমিন"
+            val ownerEmail = doc.getString("ownerEmail") ?: ""
+            val ownerPhone = doc.getString("ownerPhone") ?: doc.getString("phone") ?: ""
+            val statusStr = doc.getString("status") ?: "ACTIVE"
+            val status = try { BusinessAccountStatus.valueOf(statusStr) } catch (_: Exception) { BusinessAccountStatus.ACTIVE }
+            val planId = doc.getString("planId") ?: "plan_free"
+            val planName = doc.getString("planName") ?: "সম্পূর্ণ ফ্রি ব্যবহার"
+            val subStatusStr = doc.getString("subscriptionStatus") ?: "ACTIVE"
+            val subStatus = try { SubscriptionStatus.valueOf(subStatusStr) } catch (_: Exception) { SubscriptionStatus.ACTIVE }
+            val expiresAt = doc.getLong("subscriptionExpiresAt") ?: 0L
+            val staffCount = (doc.getLong("staffCount") ?: 1).toInt()
+            val maxStaff = (doc.getLong("maxStaffAllowed") ?: 5).toInt()
+            val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+            val lastActiveAt = doc.getLong("lastActiveAt") ?: System.currentTimeMillis()
+            val businessType = doc.getString("businessType") ?: "সাধারণ ব্যবসা"
+            val address = doc.getString("address") ?: ""
+            val district = doc.getString("district") ?: ""
+            val isAutoExpiryDisabled = doc.getBoolean("isAutoExpiryDisabled") ?: true
+            val activeDaysCount = (doc.getLong("activeDaysCount") ?: 1).toInt()
+            val proposedFee = doc.getDouble("proposedFee") ?: 0.0
+            val proposedStartDate = doc.getLong("proposedStartDate")
+            val noticeReminderDate = doc.getLong("noticeReminderDate")
+            val subscriptionNoticeNote = doc.getString("subscriptionNoticeNote") ?: ""
+            val hasActiveNotice = doc.getBoolean("hasActiveNotice") ?: (proposedFee > 0.0)
+
+            PlatformBusiness(
+                id = id,
+                businessName = name,
+                ownerUid = ownerUid,
+                ownerName = ownerName,
+                ownerEmail = ownerEmail,
+                ownerPhone = ownerPhone,
+                status = status,
+                statusReason = doc.getString("statusReason") ?: "",
+                planId = planId,
+                planName = planName,
+                subscriptionStatus = subStatus,
+                subscriptionExpiresAt = expiresAt,
+                staffCount = staffCount,
+                maxStaffAllowed = maxStaff,
+                createdAt = createdAt,
+                lastActiveAt = lastActiveAt,
+                notes = doc.getString("notes") ?: "",
+                businessType = businessType,
+                address = address,
+                district = district,
+                isAutoExpiryDisabled = isAutoExpiryDisabled,
+                activeDaysCount = activeDaysCount,
+                proposedFee = proposedFee,
+                proposedStartDate = proposedStartDate,
+                noticeReminderDate = noticeReminderDate,
+                subscriptionNoticeNote = subscriptionNoticeNote,
+                hasActiveNotice = hasActiveNotice
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun startRemoteListeners() {
+        initRemoteListeners()
+    }
+
+    /**
+     * Actively fetches all registered shops from Cloud Firestore backend.
+     * Merges remote businesses with existing and updates local persistence.
+     */
+    suspend fun refreshBusinessesFromRemote(): Result<List<PlatformBusiness>> {
+        if (!isFirebaseConfigured()) {
+            return Result.success(_businesses.value)
+        }
+        return try {
+            val firestore = FirebaseFirestore.getInstance()
+            val snapshot = firestore.collection("businesses").get().await()
+            val remoteList = snapshot.documents.mapNotNull { doc ->
+                parseBusinessDoc(doc)
+            }
+            if (remoteList.isNotEmpty()) {
+                val current = _businesses.value.toMutableList()
+                remoteList.forEach { remote ->
+                    val idx = current.indexOfFirst {
+                        it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
+                    }
+                    if (idx >= 0) {
+                        current[idx] = remote
+                    } else {
+                        current.add(0, remote)
+                    }
+                }
+                _businesses.value = current
+                saveBusinessesLocally(current)
+                Result.success(current)
+            } else {
+                Result.success(_businesses.value)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshBusinessesFromRemote failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
     private fun initRemoteListeners() {
         if (!isFirebaseConfigured()) return
         scope.launch {
             try {
                 val firestore = FirebaseFirestore.getInstance()
 
-                // 1. Remote Businesses
-                firestore.collection("businesses").addSnapshotListener { snapshot, err ->
-                    if (err != null || snapshot == null) return@addSnapshotListener
-                    val remoteList = snapshot.documents.mapNotNull { doc ->
-                        try {
-                            val id = doc.id
-                            val name = doc.getString("name") ?: doc.getString("businessName") ?: "ব্যবসা #$id"
-                            val ownerUid = doc.getString("ownerUid") ?: id
-                            val ownerName = doc.getString("ownerName") ?: "অ্যাডমিন"
-                            val ownerEmail = doc.getString("ownerEmail") ?: ""
-                            val ownerPhone = doc.getString("ownerPhone") ?: doc.getString("phone") ?: ""
-                            val statusStr = doc.getString("status") ?: "ACTIVE"
-                            val status = try { BusinessAccountStatus.valueOf(statusStr) } catch (_: Exception) { BusinessAccountStatus.ACTIVE }
-                            val planId = doc.getString("planId") ?: "plan_free"
-                            val planName = doc.getString("planName") ?: "সম্পূর্ণ ফ্রি ব্যবহার"
-                            val subStatusStr = doc.getString("subscriptionStatus") ?: "ACTIVE"
-                            val subStatus = try { SubscriptionStatus.valueOf(subStatusStr) } catch (_: Exception) { SubscriptionStatus.ACTIVE }
-                            val expiresAt = doc.getLong("subscriptionExpiresAt") ?: 0L
-                            val staffCount = (doc.getLong("staffCount") ?: 1).toInt()
-                            val maxStaff = (doc.getLong("maxStaffAllowed") ?: 5).toInt()
-                            val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-                            val lastActiveAt = doc.getLong("lastActiveAt") ?: System.currentTimeMillis()
-                            val businessType = doc.getString("businessType") ?: "সাধারণ ব্যবসা"
-                            val address = doc.getString("address") ?: ""
-                            val district = doc.getString("district") ?: ""
-                            val isAutoExpiryDisabled = doc.getBoolean("isAutoExpiryDisabled") ?: true
-                            val activeDaysCount = (doc.getLong("activeDaysCount") ?: 1).toInt()
-                            val proposedFee = doc.getDouble("proposedFee") ?: 0.0
-                            val proposedStartDate = doc.getLong("proposedStartDate")
-                            val noticeReminderDate = doc.getLong("noticeReminderDate")
-                            val subscriptionNoticeNote = doc.getString("subscriptionNoticeNote") ?: ""
-                            val hasActiveNotice = doc.getBoolean("hasActiveNotice") ?: (proposedFee > 0.0)
-
-                            PlatformBusiness(
-                                id = id,
-                                businessName = name,
-                                ownerUid = ownerUid,
-                                ownerName = ownerName,
-                                ownerEmail = ownerEmail,
-                                ownerPhone = ownerPhone,
-                                status = status,
-                                statusReason = doc.getString("statusReason") ?: "",
-                                planId = planId,
-                                planName = planName,
-                                subscriptionStatus = subStatus,
-                                subscriptionExpiresAt = expiresAt,
-                                staffCount = staffCount,
-                                maxStaffAllowed = maxStaff,
-                                createdAt = createdAt,
-                                lastActiveAt = lastActiveAt,
-                                notes = doc.getString("notes") ?: "",
-                                businessType = businessType,
-                                address = address,
-                                district = district,
-                                isAutoExpiryDisabled = isAutoExpiryDisabled,
-                                activeDaysCount = activeDaysCount,
-                                proposedFee = proposedFee,
-                                proposedStartDate = proposedStartDate,
-                                noticeReminderDate = noticeReminderDate,
-                                subscriptionNoticeNote = subscriptionNoticeNote,
-                                hasActiveNotice = hasActiveNotice
-                            )
-                        } catch (_: Exception) {
-                            null
+                // 1. Remote Businesses Listener
+                if (businessesListenerRegistration == null) {
+                    businessesListenerRegistration = firestore.collection("businesses").addSnapshotListener { snapshot, err ->
+                        if (err != null || snapshot == null) return@addSnapshotListener
+                        val remoteList = snapshot.documents.mapNotNull { doc -> parseBusinessDoc(doc) }
+                        if (remoteList.isNotEmpty()) {
+                            val current = _businesses.value.toMutableList()
+                            remoteList.forEach { remote ->
+                                val idx = current.indexOfFirst {
+                                    it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
+                                }
+                                if (idx >= 0) {
+                                    current[idx] = remote
+                                } else {
+                                    current.add(0, remote)
+                                }
+                            }
+                            _businesses.value = current
+                            saveBusinessesLocally(current)
                         }
-                    }
-                    if (remoteList.isNotEmpty()) {
-                        _businesses.value = remoteList
                     }
                 }
 
