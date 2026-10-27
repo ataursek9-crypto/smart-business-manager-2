@@ -48,8 +48,8 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    const val APK_SIGNING_SHA1 = "6D:B1:E1:CE:3A:EB:54:8C:39:02:A5:F7:01:1F:08:29:16:95:80:41"
-    const val APK_SIGNING_SHA256 = "DF:F9:94:55:81:C7:6E:D8:FF:F3:E6:A3:36:88:CF:DE:EA:D8:B7:3E:0C:37:CB:DB:A2:41:C3:80:E1:05:89:28"
+    const val APK_SIGNING_SHA1 = "FE:51:98:AE:71:D4:33:55:E9:B2:42:8B:08:44:4A:C7:E5:E6:D8:A2"
+    const val APK_SIGNING_SHA256 = "C8:EC:1C:7C:80:08:69:33:D4:79:00:1B:49:46:7C:3E:84:2F:6E:AE:8E:68:E6:76:F2:03:62:2D:2E:38:EB:5F"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 
@@ -78,7 +78,14 @@ object GoogleSignInHelper {
                     context.packageName,
                     android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
                 )
-                packageInfo.signingInfo?.apkContentsSigners
+                val signingInfo = packageInfo.signingInfo
+                if (signingInfo != null) {
+                    if (signingInfo.hasMultipleSigners()) {
+                        signingInfo.apkContentsSigners
+                    } else {
+                        signingInfo.signingCertificateHistory
+                    }
+                } else null
             } else {
                 val packageInfo = context.packageManager.getPackageInfo(
                     context.packageName,
@@ -103,7 +110,14 @@ object GoogleSignInHelper {
                     context.packageName,
                     android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
                 )
-                packageInfo.signingInfo?.apkContentsSigners
+                val signingInfo = packageInfo.signingInfo
+                if (signingInfo != null) {
+                    if (signingInfo.hasMultipleSigners()) {
+                        signingInfo.apkContentsSigners
+                    } else {
+                        signingInfo.signingCertificateHistory
+                    }
+                } else null
             } else {
                 val packageInfo = context.packageManager.getPackageInfo(
                     context.packageName,
