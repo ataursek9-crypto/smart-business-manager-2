@@ -370,6 +370,7 @@ fun SuperAdminDashboardScreen(
                     )
                 }
             }
+            }
 
             if (uiState.isLoading) {
                 Box(
@@ -864,7 +865,8 @@ fun SuperAdminBusinessesTab(
     statusFilter: BusinessAccountStatus?,
     onSearchChange: (String) -> Unit,
     onStatusFilterChange: (BusinessAccountStatus?) -> Unit,
-    onManageBusiness: (PlatformBusiness) -> Unit
+    onManageBusiness: (PlatformBusiness) -> Unit,
+    onRefresh: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier

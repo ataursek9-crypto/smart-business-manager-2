@@ -952,24 +952,51 @@ fun LoginScreen(
                             border = BorderStroke(1.dp, Color(0xFFFDE68A)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.Top
+                            Column(
+                                modifier = Modifier.padding(10.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = null,
-                                    tint = Color(0xFFB45309),
-                                    modifier = Modifier.size(18.dp).padding(top = 2.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = googleStatusMessage,
-                                    color = Color(0xFF92400E),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    lineHeight = 18.sp
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Color(0xFFB45309),
+                                        modifier = Modifier.size(18.dp).padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = googleStatusMessage,
+                                        color = Color(0xFF92400E),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        lineHeight = 18.sp
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = { showGoogleDiagDialog = true },
+                                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = Color.White,
+                                        contentColor = Color(0xFFB45309)
+                                    ),
+                                    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "📋 সাইনিং SHA-1 ও বিস্তারিত কনফিগারেশন দেখুন",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }

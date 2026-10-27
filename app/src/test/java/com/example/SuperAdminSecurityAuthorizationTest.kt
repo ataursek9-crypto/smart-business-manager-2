@@ -63,13 +63,25 @@ class SuperAdminSecurityAuthorizationTest {
 
     @After
     fun tearDown() {
-        org.robolectric.shadows.ShadowLooper.idleMainLooper()
-        viewModel.syncManager.cancelActiveSync()
-        CloudBusinessAuth.clear(app)
-        superAdminRepo.resetStateForTesting()
-        AppDatabase.setInstanceForTesting(null)
-        Dispatchers.resetMain()
-        db.close()
+        try {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            if (::viewModel.isInitialized) {
+                viewModel.syncManager.cancelActiveSync()
+            }
+            if (::app.isInitialized) {
+                CloudBusinessAuth.clear(app)
+            }
+            if (::superAdminRepo.isInitialized) {
+                superAdminRepo.resetStateForTesting()
+            }
+            AppDatabase.setInstanceForTesting(null)
+            if (::db.isInitialized && db.isOpen) {
+                db.close()
+            }
+        } catch (_: Throwable) {}
+        try {
+            Dispatchers.resetMain()
+        } catch (_: Throwable) {}
     }
 
     /**
