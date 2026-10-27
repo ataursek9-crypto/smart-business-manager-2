@@ -489,10 +489,6 @@ class SuperAdminRepository(
         }
     }
 
-    fun startRemoteListeners() {
-        initRemoteListeners()
-    }
-
     /**
      * Actively fetches all registered shops from Cloud Firestore backend.
      * Merges remote businesses with existing and updates local persistence.
@@ -500,6 +496,18 @@ class SuperAdminRepository(
     suspend fun refreshBusinessesFromRemote(): Result<List<PlatformBusiness>> {
         if (!isFirebaseConfigured()) {
             return Result.success(_businesses.value)
+        }
+        val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (authUser == null) {
+            val msg = "ফায়ারবেস অথেনটিকেশন অনুপস্থিত: ক্লাউড থেকে সকল দোকানের তথ্য দেখতে গুগল সাইন-ইন নিশ্চিত করুন।"
+            Log.w(TAG, "refreshBusinessesFromRemote: $msg")
+            return Result.failure(IllegalStateException("NO_FIREBASE_AUTH: $msg"))
+        }
+        val currentEmail = authUser.email?.trim()?.lowercase() ?: ""
+        if (!isSuperAdminEmail(currentEmail)) {
+            val msg = "অননুমোদিত গুগল একাউন্ট ($currentEmail): শুধুমাত্র অনুমোদিত সুপার এডমিন গুগল একাউন্ট (ataurgonee4@gmail.com) থেকে সকল দোকানের তথ্য পড়া সম্ভব।"
+            Log.w(TAG, "refreshBusinessesFromRemote: $msg")
+            return Result.failure(SecurityException("UNAUTHORIZED_EMAIL: $msg"))
         }
         return try {
             val firestore = FirebaseFirestore.getInstance()
@@ -521,13 +529,52 @@ class SuperAdminRepository(
                 }
                 _businesses.value = current
                 saveBusinessesLocally(current)
+                startRemoteListeners()
                 Result.success(current)
             } else {
+                startRemoteListeners()
                 Result.success(_businesses.value)
             }
         } catch (e: Exception) {
             Log.w(TAG, "refreshBusinessesFromRemote failed: ${e.message}")
             Result.failure(e)
+        }
+    }
+
+    fun startRemoteListeners() {
+        if (!isFirebaseConfigured()) return
+        val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (authUser == null || !isSuperAdminEmail(authUser.email)) return
+
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            businessesListenerRegistration?.remove()
+            businessesListenerRegistration = firestore.collection("businesses").addSnapshotListener { snapshot, err ->
+                if (err != null) {
+                    Log.w(TAG, "businessesListener live update notice: ${err.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val remoteList = snapshot.documents.mapNotNull { doc -> parseBusinessDoc(doc) }
+                    if (remoteList.isNotEmpty()) {
+                        val current = _businesses.value.toMutableList()
+                        remoteList.forEach { remote ->
+                            val idx = current.indexOfFirst {
+                                it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
+                            }
+                            if (idx >= 0) {
+                                current[idx] = remote
+                            } else {
+                                current.add(0, remote)
+                            }
+                        }
+                        _businesses.value = current
+                        saveBusinessesLocally(current)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "startRemoteListeners exception: ${e.message}")
         }
     }
 
@@ -668,7 +715,8 @@ class SuperAdminRepository(
 
         // Record Audit Log
         val actionTitle = when (newStatus) {
-            BusinessAccountStatus.ACTIVE -> "ব্যবসা প্রতিষ্ঠান পুনর্সক্রিয়করণ"
+            BusinessAccountStatus.PENDING -> "ব্যবসা প্রতিষ্ঠান অপেক্ষমাণ তালিকায় স্থানান্তর"
+            BusinessAccountStatus.ACTIVE -> "ব্যবসা প্রতিষ্ঠান অনুমোদন ও সক্রিয়করণ"
             BusinessAccountStatus.SUSPENDED -> "ব্যবসা প্রতিষ্ঠান সাময়িক স্থগিতকরণ"
             BusinessAccountStatus.DEACTIVATED -> "ব্যবসা প্রতিষ্ঠান নিষ্ক্রিয়করণ"
         }
@@ -1237,6 +1285,7 @@ class SuperAdminRepository(
         val pList = _payments.value
 
         val totalB = bList.size
+        val pendingB = bList.count { it.status == BusinessAccountStatus.PENDING }
         val activeB = bList.count { it.status == BusinessAccountStatus.ACTIVE }
         val suspendedB = bList.count { it.status == BusinessAccountStatus.SUSPENDED }
 
@@ -1257,6 +1306,7 @@ class SuperAdminRepository(
 
         return PlatformOverviewStats(
             totalBusinesses = totalB,
+            pendingBusinesses = pendingB,
             activeBusinesses = activeB,
             suspendedBusinesses = suspendedB,
             activeSubscriptions = activeSubs,

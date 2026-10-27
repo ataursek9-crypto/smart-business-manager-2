@@ -31,7 +31,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.*
 import com.example.data.repository.SuperAdminRepository
+import com.example.ui.theme.PrimaryNavy
 import com.example.util.BengaliFormatter
+import com.example.util.GoogleSignInHelper
+import com.google.firebase.auth.FirebaseAuth
 import com.example.viewmodel.SuperAdminTab
 import com.example.viewmodel.SuperAdminViewModel
 import java.text.SimpleDateFormat
@@ -136,21 +139,25 @@ fun SuperAdminDashboardScreen(
     var paymentToReview by remember { mutableStateOf<PlatformPayment?>(null) }
     var planToEdit by remember { mutableStateOf<SubscriptionPlan?>(null) }
 
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
+    var firebaseAuthUser by remember {
+        mutableStateOf(try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null })
+    }
+    var isGoogleSigningIn by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.successMessage) {
         uiState.successMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearFeedback()
-        }
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar("ত্রুটি: $it")
             viewModel.clearFeedback()
         }
     }
 
     // Auto-refresh businesses from Cloud Firestore on entry
     LaunchedEffect(Unit) {
+        firebaseAuthUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
         viewModel.refreshBusinesses()
     }
 
@@ -269,26 +276,139 @@ fun SuperAdminDashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // Auth Status Strip
+            Surface(
+                color = if (firebaseAuthUser != null && SuperAdminRepository.isSuperAdminEmail(firebaseAuthUser?.email)) Color(0xFFF1F8E9) else Color(0xFFFFF8E1),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val isAuthed = firebaseAuthUser != null && SuperAdminRepository.isSuperAdminEmail(firebaseAuthUser?.email)
+                    Icon(
+                        imageVector = if (isAuthed) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                        contentDescription = null,
+                        tint = if (isAuthed) Color(0xFF2E7D32) else Color(0xFFF57F17),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isAuthed) "ক্লাউড ডেটাবেস সংযুক্ত: smart-business-manager-71879" else "ক্লাউড ডেটাবেস অ্যাক্সেস অফলাইন",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (isAuthed) Color(0xFF1B5E20) else Color(0xFFE65100)
+                        )
+                        Text(
+                            text = if (firebaseAuthUser != null) {
+                                "অ্যাকাউন্ট: ${firebaseAuthUser?.email} (UID: ${firebaseAuthUser?.uid?.take(8)}... | ভেরিফাইড: ${firebaseAuthUser?.isEmailVerified})"
+                            } else {
+                                "ফায়ারবেস অথেনটিকেশন সক্রিয় নেই। লাইভ ডেটা পড়তে সাইন-ইন প্রয়োজন।"
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (!isAuthed) {
+                        Button(
+                            onClick = {
+                                isGoogleSigningIn = true
+                                GoogleSignInHelper.launchGoogleSignIn(
+                                    context = context,
+                                    scope = coroutineScope,
+                                    onAuthSuccess = { fUser ->
+                                        isGoogleSigningIn = false
+                                        firebaseAuthUser = fUser
+                                        viewModel.refreshBusinesses()
+                                    },
+                                    onCancelled = { isGoogleSigningIn = false },
+                                    onError = { isGoogleSigningIn = false }
+                                )
+                            },
+                            enabled = !isGoogleSigningIn,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryNavy),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(34.dp).testTag("super_admin_inline_google_signin_button")
+                        ) {
+                            if (isGoogleSigningIn) {
+                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("গুগল সাইন-ইন", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Live Feedback Banner
             if (uiState.errorMessage != null) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().clickable { viewModel.clearFeedback() }
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage ?: "",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { viewModel.clearFeedback() }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "বন্ধ করুন", modifier = Modifier.size(16.dp))
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = uiState.errorMessage ?: "",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { viewModel.clearFeedback() }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "বন্ধ করুন", modifier = Modifier.size(16.dp))
+                            }
+                        }
+
+                        // Action buttons if error is permission or auth related
+                        if (uiState.errorMessage?.contains("গুগল সাইন-ইন", ignoreCase = true) == true ||
+                            uiState.errorMessage?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        isGoogleSigningIn = true
+                                        GoogleSignInHelper.launchGoogleSignIn(
+                                            context = context,
+                                            scope = coroutineScope,
+                                            onAuthSuccess = { fUser ->
+                                                isGoogleSigningIn = false
+                                                firebaseAuthUser = fUser
+                                                viewModel.refreshBusinesses()
+                                            },
+                                            onCancelled = { isGoogleSigningIn = false },
+                                            onError = { isGoogleSigningIn = false }
+                                        )
+                                    },
+                                    enabled = !isGoogleSigningIn,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(34.dp).testTag("super_admin_banner_google_signin_button")
+                                ) {
+                                    Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("অনুমোদিত একাউন্টে সাইন-ইন", fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { viewModel.refreshBusinesses() },
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(34.dp).testTag("super_admin_retry_refresh_button")
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("পুনরায় লোড", fontSize = 12.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -899,6 +1019,18 @@ fun SuperAdminBusinessesTab(
                     selected = statusFilter == null,
                     onClick = { onStatusFilterChange(null) },
                     label = { Text("সকল (${businesses.size})") }
+                )
+            }
+            item {
+                val pendingCount = businesses.count { it.status == BusinessAccountStatus.PENDING }
+                FilterChip(
+                    selected = statusFilter == BusinessAccountStatus.PENDING,
+                    onClick = { onStatusFilterChange(BusinessAccountStatus.PENDING) },
+                    label = { Text("অপেক্ষমাণ ($pendingCount)") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFFFF3E0),
+                        selectedLabelColor = Color(0xFFE65100)
+                    )
                 )
             }
             item {

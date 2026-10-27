@@ -4,6 +4,7 @@ package com.example.data.model
  * Status of a registered business on the platform.
  */
 enum class BusinessAccountStatus {
+    PENDING,     // অপেক্ষমাণ (নতুন রেজিস্ট্রেশন, অনুমোদনের অপেক্ষায়)
     ACTIVE,      // সক্রিয়
     SUSPENDED,   // স্থগিত (অ্যাডমিন কর্তৃক বন্ধ)
     DEACTIVATED  // নিষ্ক্রিয়
@@ -178,6 +179,7 @@ data class PlatformSystemSettings(
  */
 data class PlatformOverviewStats(
     val totalBusinesses: Int = 0,
+    val pendingBusinesses: Int = 0,
     val activeBusinesses: Int = 0,
     val suspendedBusinesses: Int = 0,
     val activeSubscriptions: Int = 0,

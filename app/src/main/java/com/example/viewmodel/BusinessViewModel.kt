@@ -1127,10 +1127,10 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     ownerName = ownerName.trim(),
                     ownerEmail = ownerEmail.trim().lowercase(),
                     ownerPhone = normalizedPhone,
-                    status = BusinessAccountStatus.ACTIVE,
+                    status = BusinessAccountStatus.PENDING,
                     planId = "plan_free",
                     planName = "সম্পূর্ণ ফ্রি ব্যবহার",
-                    subscriptionStatus = SubscriptionStatus.ACTIVE,
+                    subscriptionStatus = SubscriptionStatus.TRIAL,
                     subscriptionExpiresAt = 0L, // Disabled auto expiry
                     isAutoExpiryDisabled = true,
                     staffCount = 1,
@@ -1142,7 +1142,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     firstUseAt = System.currentTimeMillis(),
                     lastActiveAt = System.currentTimeMillis(),
                     phoneVerified = isPhoneVerified,
-                    notes = "নতুন দোকানদার স্ব-নিবন্ধন (ডিফল্ট আজীবন ফ্রি)"
+                    notes = "নতুন দোকানদার স্ব-নিবন্ধন (সুপার এডমিন অনুমোদনের অপেক্ষায়)"
                 )
 
                 // Register into SuperAdminRepository and sync directly to Cloud Firestore backend

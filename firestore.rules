@@ -23,36 +23,63 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Super Admin: Registry Check
+    function isRegistrySuperAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == true &&
+        get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.role == 'SUPER_ADMIN';
+    }
+
+    // Explicit revocation check
+    function isRevokedSuperAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == false;
+    }
+
+    // Super Admin: Master Email List (Google Verified Identity)
     function isMasterAdminEmail() {
-      return isSignedIn() && request.auth.token.email != null &&
-        (
-          request.auth.token.email.matches('(?i)^(buddavaibinodon@gmail\\.com|ataursek9@gmail\\.com|ataurgonee4@gmail\\.com|support@smartbiz\\.local|gonee8666@gmail\\.com|ataulgonee786@gmail\\.com|ataurpos@gmail\\.com|ataur50305@gmail\\.com|a48268993@gmail\\.com|jamesfashion792@gmail\\.com)$') ||
+      return isSignedIn() &&
+        request.auth.token.email != null &&
+        (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com') && (
           request.auth.token.email in [
-            'buddavaibinodon@gmail.com',
-            'ataursek9@gmail.com',
             'ataurgonee4@gmail.com',
-            'support@smartbiz.local',
+            'ataursek9@gmail.com',
+            'buddavaibinodon@gmail.com',
             'gonee8666@gmail.com',
             'ataulgonee786@gmail.com',
             'ataurpos@gmail.com',
             'ataur50305@gmail.com',
             'a48268993@gmail.com',
-            'jamesfashion792@gmail.com'
-          ]
+            'jamesfashion792@gmail.com',
+            'support@smartbiz.local'
+          ] ||
+          (request.auth.token.email is string &&
+           request.auth.token.email.lower() in [
+             'ataurgonee4@gmail.com',
+             'ataursek9@gmail.com',
+             'buddavaibinodon@gmail.com',
+             'gonee8666@gmail.com',
+             'ataulgonee786@gmail.com',
+             'ataurpos@gmail.com',
+             'ataur50305@gmail.com',
+             'a48268993@gmail.com',
+             'jamesfashion792@gmail.com',
+             'support@smartbiz.local'
+           ])
         );
     }
 
+    // Unified, synchronized Super Admin permission
     function isSuperAdmin() {
-      return isMasterAdminEmail() ||
-        (isSignedIn() &&
-         exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == true);
+      return !isRevokedSuperAdmin() && (isRegistrySuperAdmin() || isMasterAdminEmail());
     }
 
     // Business ownership / staff helper
     function isBusinessOwner(businessId) {
       return isSignedIn() && (
-        isMasterAdminEmail() ||
+        isSuperAdmin() ||
         request.auth.uid == businessId ||
         (exists(/databases/$(database)/documents/businesses/$(businessId)) &&
          (get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid ||
@@ -80,6 +107,22 @@ service cloud.firestore {
          get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.businessId == businessId &&
          get(/databases/$(database)/documents/staff_memberships/$(request.auth.uid)).data.isActive == true)
       );
+    }
+
+    // Protection against privilege escalation by business owners on self-update
+    function isBusinessOwnerProfileUpdate(existingData, incomingData) {
+      return !incomingData.diff(existingData).affectedKeys().hasAny([
+        'subscriptionStatus',
+        'subscriptionExpiresAt',
+        'planId',
+        'planName',
+        'isAutoExpiryDisabled',
+        'status',
+        'maxStaffAllowed',
+        'scheduledPolicyChange',
+        'scheduledPolicyEffectiveAt',
+        'ownerUid'
+      ]);
     }
 
     // Validation blueprints
@@ -175,14 +218,22 @@ service cloud.firestore {
     match /businesses/{businessId} {
       allow get: if isSuperAdmin() || (isSignedIn() && isBusinessStaff(businessId));
       allow list: if isSuperAdmin();
-      allow create: if (isSignedIn() && (
-        request.auth.uid == businessId ||
-        incoming().ownerUid == request.auth.uid ||
-        isBusinessOwner(businessId)
-      )) || (
-        isValidNewShopRegistration(incoming(), businessId)
+      allow create: if isSuperAdmin() || (
+        isSignedIn() && (
+          request.auth.uid == businessId ||
+          incoming().ownerUid == request.auth.uid ||
+          (!('ownerUid' in incoming()) && request.auth.uid == businessId)
+        ) &&
+        isValidNewShopRegistration(incoming(), businessId) &&
+        (!('planId' in incoming()) || incoming().planId in ['plan_free', 'free', 'basic', 'default']) &&
+        (!('status' in incoming()) || incoming().status in ['PENDING', 'ACTIVE']) &&
+        (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus in ['PENDING', 'ACTIVE'])
       );
-      allow update, delete: if isSuperAdmin() || isBusinessOwner(businessId);
+      allow update: if isSuperAdmin() || (
+        isBusinessOwner(businessId) &&
+        isBusinessOwnerProfileUpdate(existing(), incoming())
+      );
+      allow delete: if isSuperAdmin();
 
       // 1. Products
       match /products/{productId} {
@@ -211,47 +262,45 @@ service cloud.firestore {
       // 4. Payment Receipts - Staff can collect & sync, only Owner can delete
       match /payments/{receiptNumber} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create: if isBusinessStaff(businessId) && isValidReceipt(incoming());
-        allow update: if (isBusinessOwner(businessId) || isBusinessStaff(businessId)) && isValidReceipt(incoming());
+        allow create, update: if isBusinessStaff(businessId) && isValidReceipt(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 5. Expenses - Staff can submit & sync (pending), only Owner can approve or delete
+      // 5. Expenses - Staff can log expenses, only Owner can approve or delete
       match /expenses/{expenseId} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create: if isBusinessStaff(businessId) && isValidExpense(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
-        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && existing().status == 'PENDING' && incoming().status == 'PENDING')) && isValidExpense(incoming());
-        allow delete: if isBusinessOwner(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidExpense(incoming());
+        allow update, delete: if isBusinessOwner(businessId);
       }
 
-      // 6. Product Submissions - Staff can submit & resubmit, only Owner can approve or return for correction
+      // 6. Staff Accounts - Managed only by Owner
+      match /staff/{staffUid} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create, update, delete: if isBusinessOwner(businessId);
+      }
+
+      // 7. Shop Settings & Configuration - Managed only by Owner
+      match /settings/{settingId} {
+        allow get, list: if isBusinessStaff(businessId);
+        allow create, update, delete: if isBusinessOwner(businessId);
+      }
+
+      // 8. Staff Product Submissions - Staff propose items, Owner reviews/approves
       match /product_submissions/{submissionId} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create: if isBusinessStaff(businessId) && isValidProductSubmission(incoming()) && (isBusinessOwner(businessId) || incoming().status == 'PENDING');
-        allow update: if (isBusinessOwner(businessId) || (isBusinessStaff(businessId) && (existing().status == 'NEEDS_CORRECTION' || (existing().status == 'PENDING' && incoming().status == 'PENDING')))) && isValidProductSubmission(incoming());
+        allow create: if isBusinessStaff(businessId) && isValidProductSubmission(incoming());
+        allow update: if isBusinessOwner(businessId) && isValidProductSubmission(incoming());
         allow delete: if isBusinessOwner(businessId);
       }
 
-      // 7. Tombstones - Prevents cross-device resurrection of deleted records
+      // 9. Tombstones for Syncing Deletions across devices
       match /tombstones/{tombstoneId} {
         allow get, list: if isBusinessStaff(businessId);
-        allow create, update: if isBusinessOwner(businessId) && isValidTombstone(incoming());
-        allow delete: if isBusinessOwner(businessId);
+        allow create: if isBusinessStaff(businessId) && isValidTombstone(incoming());
+        allow update, delete: if isBusinessOwner(businessId);
       }
 
-      // 8. Staff Members - Owner manages staff accounts, authenticated staff can link own profile
-      match /staff/{staffUid} {
-        allow get: if isSignedIn() && (request.auth.uid == businessId || request.auth.uid == staffUid || isBusinessStaff(businessId));
-        allow list: if isBusinessOwner(businessId) || isBusinessStaff(businessId);
-        allow create, update: if isBusinessOwner(businessId) || (
-          isSignedIn() && request.auth.uid == staffUid &&
-          incoming().isActive == true &&
-          incoming().role in ['SALESMAN', 'ADMIN'] &&
-          incoming().businessId == businessId
-        );
-        allow delete: if isBusinessOwner(businessId);
-      }
-
+      // 10. Staff mapping by phone & email
       match /staff_by_phone/{phone} {
         allow get: if isSignedIn();
         allow list, create, update, delete: if isBusinessOwner(businessId);
@@ -266,70 +315,90 @@ service cloud.firestore {
       }
     }
 
-    // Registered phones index for unique registration verification across all devices
+    // 11. Registered phones index - strictly protected against scraping
     match /registered_phones/{phone} {
-      allow get: if true;
+      allow get: if isSuperAdmin() || (
+        isSignedIn() &&
+        resource != null &&
+        'businessId' in resource.data &&
+        isBusinessStaff(resource.data.businessId)
+      );
       allow list: if isSuperAdmin();
-      allow create: if phone.size() >= 5 && phone.size() <= 30 && incoming().phone == phone && incoming().businessId is string;
+      allow create: if isSignedIn() && phone.size() >= 5 && phone.size() <= 30 &&
+                       incoming().phone == phone && incoming().businessId is string &&
+                       (isSuperAdmin() || incoming().businessId == request.auth.uid || incoming().ownerUid == request.auth.uid || isBusinessOwner(incoming().businessId)) &&
+                       !exists(/databases/$(database)/documents/registered_phones/$(phone));
       allow update, delete: if isSuperAdmin();
     }
 
-    // Staff memberships index to allow salesmen and admins on separate devices to resolve their authorized businessId
+    // 12. Staff memberships index - managed only by Business Owner or Super Admin
     match /staff_memberships/{userId} {
-      allow get: if isSignedIn() && (request.auth.uid == userId || (resource != null && 'businessId' in resource.data && isBusinessOwner(resource.data.businessId)));
-      allow list: if false;
-      allow create, update: if isSignedIn() && (
-        (incoming().businessId is string && request.auth.uid == incoming().businessId) ||
-        (request.auth.uid == userId && incoming().businessId is string &&
-         incoming().role in ['SALESMAN', 'ADMIN'] && incoming().isActive == true)
-      );
-      allow delete: if isSignedIn() && (
+      allow get: if isSignedIn() && (
         request.auth.uid == userId ||
-        (resource != null && 'businessId' in resource.data && request.auth.uid == resource.data.businessId)
+        isSuperAdmin() ||
+        (resource != null && 'businessId' in resource.data && isBusinessOwner(resource.data.businessId))
+      );
+      allow list: if isSuperAdmin();
+      allow create, update: if isSuperAdmin() || (
+        isSignedIn() &&
+        incoming().businessId is string &&
+        isBusinessOwner(incoming().businessId) &&
+        incoming().role in ['SALESMAN', 'ADMIN'] &&
+        incoming().isActive is bool
+      );
+      allow delete: if isSuperAdmin() || (
+        isSignedIn() &&
+        resource != null &&
+        'businessId' in resource.data &&
+        isBusinessOwner(resource.data.businessId)
       );
     }
 
-    // 9. Platform Plans (Readable by authenticated users, manageable by Super Admin)
+    // 13. Platform Plans (Public plans read by signed-in users, managed by Super Admin)
     match /platform_plans/{planId} {
       allow get, list: if isSignedIn();
       allow create, update, delete: if isSuperAdmin();
     }
 
-    // 10. Platform Subscriptions
+    // 14. Platform Subscriptions
     match /platform_subscriptions/{subId} {
       allow get: if isSuperAdmin() || (isSignedIn() && resource != null && 'businessId' in resource.data && isBusinessStaff(resource.data.businessId));
       allow list: if isSuperAdmin();
       allow create, update, delete: if isSuperAdmin();
     }
 
-    // 11. Platform Payments (Created by shop staff, verified and managed by Super Admin)
+    // 15. Platform Payments (Strictly validated self-shop creation, verified only by Super Admin)
     match /platform_payments/{paymentId} {
-      allow get: if isSuperAdmin() || (isSignedIn() && resource != null && 'businessId' in resource.data && isBusinessStaff(resource.data.businessId));
-      allow list: if isSuperAdmin();
-      allow create: if isSignedIn() && incoming().businessId is string && isBusinessStaff(incoming().businessId);
-      allow update: if isSuperAdmin();
-      allow delete: if isSuperAdmin();
+      allow get, list: if isSuperAdmin() || (isSignedIn() && resource != null && 'businessId' in resource.data && isBusinessStaff(resource.data.businessId));
+      allow create: if isSignedIn() &&
+        incoming().businessId is string &&
+        isBusinessStaff(incoming().businessId) &&
+        incoming().amount is number && incoming().amount > 0 && incoming().amount <= 10000000 &&
+        incoming().status == 'PENDING' &&
+        (!('verified' in incoming()) || incoming().verified == false);
+      allow update, delete: if isSuperAdmin();
     }
 
-    // 12. Platform Audit Logs (Strictly immutable, created & read only by Super Admin)
+    // 16. Platform Audit Logs (Strictly immutable, created & read only by Super Admin)
     match /platform_audit_logs/{logId} {
       allow get, list: if isSuperAdmin();
       allow create: if isSuperAdmin();
       allow update, delete: if false;
     }
 
-    // 13. Platform Global Settings
+    // 17. Platform Settings (Only public 'global_config' readable by regular users; secrets guarded)
     match /platform_settings/{settingId} {
-      allow get: if isSignedIn();
+      allow get: if isSuperAdmin() || (isSignedIn() && settingId == 'global_config');
       allow list: if isSuperAdmin();
       allow create, update, delete: if isSuperAdmin();
     }
 
-    // 14. Platform Super Admin Registry
+    // 18. Platform Super Admin Registry
     match /platform_superadmins/{uid} {
       allow get: if isSignedIn() && (request.auth.uid == uid || isSuperAdmin());
       allow list: if isSuperAdmin();
-      allow create, update, delete: if isSuperAdmin();
+      allow create: if isSuperAdmin() || (isMasterAdminEmail() && request.auth.uid == uid);
+      allow update, delete: if isSuperAdmin();
     }
   }
 }

@@ -47,8 +47,8 @@ SmartBusinessManager_Project.zip
 ৩. ফায়ারবেস কনসোল (Firebase Console) কনফিগারেশন:
    যদি ফোনে Google Sign-In ক্লিক করলে সাথে সাথে উইন্ডো বন্ধ হয়ে যায় (Auto-Cancelled), তবে নিশ্চিত করুন যে Firebase Console-এ আপনার অ্যাপ্লিকেশনের সাইনিং SHA-1 ফিঙ্গারপ্রিন্ট যুক্ত রয়েছে:
    • প্যাকেজ নেম: com.aistudio.smartbiz.mgr
-   • সাইনিং SHA-1: CC:58:AF:B5:A6:2C:89:A8:D4:58:75:B3:E6:95:E1:70:D4:89:31:39
-   • সাইনিং SHA-256: 56:6D:8B:64:E9:70:2E:6F:8C:00:BC:7D:7D:B8:41:62:2B:BB:A2:96:68:1C:B9:5B:4E:AC:87:46:74:8A:41:35
+   • সাইনিং SHA-1: 78:3B:FF:37:FE:18:37:6B:71:AF:DF:82:F3:2F:F1:A0:86:3D:C6:2C
+   • সাইনিং SHA-256: A9:31:55:5F:E0:E6:CD:58:E2:D5:75:D3:31:E7:85:7B:AA:DF:B3:14:90:A2:D4:96:D8:9D:D1:45:CD:70:73:D8
    • Web Client ID: 484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com
 
 --------------------------------------------------------------------------------

@@ -27,7 +27,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.platform.LocalContext
 import com.example.ui.theme.PrimaryNavy
+import com.example.util.GoogleSignInHelper
 import com.example.viewmodel.BusinessViewModel
 import com.example.viewmodel.SuperAdminViewModel
 
@@ -63,8 +66,11 @@ fun ShopRegistrationScreen(
     var errorMessage by remember { mutableStateOf("") }
     var successRegisteredShopId by remember { mutableStateOf<String?>(null) }
 
-    val currentGoogleUser = remember {
-        try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var isGoogleSigningIn by remember { mutableStateOf(false) }
+    var currentGoogleUser by remember {
+        mutableStateOf(try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null })
     }
 
     LaunchedEffect(currentGoogleUser) {
@@ -177,38 +183,104 @@ fun ShopRegistrationScreen(
                 }
             }
 
-            if (currentGoogleUser != null && !currentGoogleUser.email.isNullOrBlank()) {
+            if (currentGoogleUser != null && !currentGoogleUser?.email.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .widthIn(max = 540.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.AccountCircle,
+                            imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = Color(0xFF2E7D32),
                             modifier = Modifier.size(28.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "সংযুক্ত Google অ্যাকাউন্ট: ${currentGoogleUser.email}",
+                                text = "সংযুক্ত Google অ্যাকাউন্ট: ${currentGoogleUser?.email}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = Color(0xFF1B5E20)
                             )
                             Text(
-                                text = "দোকান রেজিস্ট্রেশন সম্পন্ন হলে এই Google অ্যাকাউন্ট দিয়েই সরাসরি লগইন করতে পারবেন।",
+                                text = "দোকানটি ক্লাউড ডেটাবেস ও সুপার অ্যাডমিন প্যানেলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে।",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                color = Color(0xFF2E7D32)
                             )
+                        }
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 540.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CloudSync, contentDescription = null, tint = Color(0xFFF57F17), modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "সুপার অ্যাডমিন ও ক্লাউড সিঙ্ক সক্রিয় করুন",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFE65100)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "ক্লাউড ব্যাকআপ ও সুপার অ্যাডমিন অনুমোদনের জন্য আপনার Google অ্যাকাউন্ট সংযুক্ত করুন।",
+                            fontSize = 11.sp,
+                            color = Color(0xFF795548),
+                            lineHeight = 15.sp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                isGoogleSigningIn = true
+                                GoogleSignInHelper.launchGoogleSignIn(
+                                    context = context,
+                                    scope = coroutineScope,
+                                    onAuthSuccess = { fUser ->
+                                        isGoogleSigningIn = false
+                                        currentGoogleUser = fUser
+                                        if (ownerName.isBlank() && !fUser.displayName.isNullOrBlank()) {
+                                            ownerName = fUser.displayName!!
+                                        }
+                                    },
+                                    onCancelled = { isGoogleSigningIn = false },
+                                    onError = { err ->
+                                        isGoogleSigningIn = false
+                                        errorMessage = "Google সাইন-ইন ত্রুটি: $err"
+                                    }
+                                )
+                            },
+                            enabled = !isGoogleSigningIn,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF374151)),
+                            border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(44.dp).testTag("shop_registration_google_signin_button")
+                        ) {
+                            if (isGoogleSigningIn) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = PrimaryNavy)
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    GoogleLogoMini(modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Google দিয়ে অ্যাকাউন্ট যুক্ত করুন", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF374151))
+                                }
+                            }
                         }
                     }
                 }
@@ -604,6 +676,53 @@ fun ShopRegistrationScreen(
                             }
                             if (!agreedToTerms) {
                                 errorMessage = "অনুগ্রহ করে শর্তাবলীতে সম্মতি প্রদান করুন!"
+                                return@Button
+                            }
+
+                            if (currentGoogleUser == null) {
+                                isGoogleSigningIn = true
+                                errorMessage = "সুপার অ্যাডমিন ও ক্লাউড সিঙ্কের জন্য Google অ্যাকাউন্ট নির্বাচন করুন..."
+                                GoogleSignInHelper.launchGoogleSignIn(
+                                    context = context,
+                                    scope = coroutineScope,
+                                    onAuthSuccess = { fUser ->
+                                        isGoogleSigningIn = false
+                                        currentGoogleUser = fUser
+                                        if (ownerName.isBlank() && !fUser.displayName.isNullOrBlank()) {
+                                            ownerName = fUser.displayName!!
+                                        }
+                                        isLoading = true
+                                        errorMessage = ""
+                                        viewModel.registerNewShop(
+                                            shopName = cleanShop,
+                                            ownerName = cleanOwner,
+                                            phone = cleanPhone,
+                                            address = cleanAddress,
+                                            district = cleanDistrict,
+                                            businessType = selectedBusinessType,
+                                            pin = cleanPin,
+                                            isPhoneVerified = isPhoneVerified,
+                                            ownerEmail = fUser.email ?: "",
+                                            ownerUid = fUser.uid,
+                                            superAdminViewModel = superAdminViewModel
+                                        ) { success, msg, newShopId ->
+                                            isLoading = false
+                                            if (success) {
+                                                successRegisteredShopId = newShopId
+                                            } else {
+                                                errorMessage = msg
+                                            }
+                                        }
+                                    },
+                                    onCancelled = {
+                                        isGoogleSigningIn = false
+                                        errorMessage = "সুপার অ্যাডমিন ড্যাশবোর্ডে নিবন্ধিত হতে Google সাইন-ইন আবশ্যক!"
+                                    },
+                                    onError = { err ->
+                                        isGoogleSigningIn = false
+                                        errorMessage = "Google সাইন-ইন ব্যর্থ: $err"
+                                    }
+                                )
                                 return@Button
                             }
 

@@ -148,11 +148,22 @@ class SuperAdminViewModel @JvmOverloads constructor(
                 val count = result.getOrNull()?.size ?: repository.businesses.value.size
                 "ক্লাউড থেকে $count টি দোকানের তথ্য সফলভাবে আপডেট হয়েছে।"
             } else {
-                val raw = result.exceptionOrNull()?.message ?: ""
-                if (raw.contains("PERMISSION_DENIED", ignoreCase = true)) {
-                    "অনুমোদন ত্রুটি (PERMISSION_DENIED): ক্লাউড ডেটাবেস থেকে সকল দোকানের তথ্য দেখতে অনুমোদিত সুপার এডমিন গুগল একাউন্টে সাইন-ইন নিশ্চিত করুন।"
-                } else {
-                    "দোকানের তথ্য লোড করতে সমস্যা হয়েছে: ${result.exceptionOrNull()?.localizedMessage ?: "নেটওয়ার্ক ত্রুটি"}"
+                val ex = result.exceptionOrNull()
+                val raw = ex?.message ?: ""
+                when {
+                    raw.startsWith("NO_FIREBASE_AUTH:") -> {
+                        "গুগল সাইন-ইন আবশ্যক: ক্লাউড থেকে সকল দোকানের তথ্য দেখতে অনুমোদিত সুপার এডমিন গুগল একাউন্টে সাইন-ইন নিশ্চিত করুন।"
+                    }
+                    raw.startsWith("UNAUTHORIZED_EMAIL:") -> {
+                        raw.removePrefix("UNAUTHORIZED_EMAIL:").trim()
+                    }
+                    raw.contains("PERMISSION_DENIED", ignoreCase = true) -> {
+                        val authEmail = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email } catch (_: Exception) { null }
+                        "অনুমোদন ত্রুটি (PERMISSION_DENIED): সাইন-ইন করা একাউন্ট '${authEmail ?: "সাইন-ইন নেই"}' ক্লাউড পড়ার অনুমতি পায়নি। অনুগ্রহ করে Firebase Console-এ (Project: smart-business-manager-71879) firestore.rules পাবলিশ করা আছে কি না নিশ্চিত করুন।"
+                    }
+                    else -> {
+                        "দোকানের তথ্য লোড করতে সমস্যা হয়েছে: ${ex?.localizedMessage ?: "নেটওয়ার্ক ত্রুটি"}"
+                    }
                 }
             }
             _uiState.update {

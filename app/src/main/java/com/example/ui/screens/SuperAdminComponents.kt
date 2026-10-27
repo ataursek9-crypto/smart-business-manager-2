@@ -84,6 +84,7 @@ fun MetricStatCard(
 @Composable
 fun BusinessStatusBadge(status: BusinessAccountStatus) {
     val (bgColor, textColor, text) = when (status) {
+        BusinessAccountStatus.PENDING -> Triple(Color(0xFFFFF3E0), Color(0xFFE65100), "অপেক্ষমাণ")
         BusinessAccountStatus.ACTIVE -> Triple(Color(0xFFE8F5E9), Color(0xFF2E7D32), "সক্রিয়")
         BusinessAccountStatus.SUSPENDED -> Triple(Color(0xFFFFEBEE), Color(0xFFC62828), "স্থগিত")
         BusinessAccountStatus.DEACTIVATED -> Triple(Color(0xFFECEFF1), Color(0xFF546E7A), "নিষ্ক্রিয়")
