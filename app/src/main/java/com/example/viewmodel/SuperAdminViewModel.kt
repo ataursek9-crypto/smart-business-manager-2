@@ -148,7 +148,12 @@ class SuperAdminViewModel @JvmOverloads constructor(
                 val count = result.getOrNull()?.size ?: repository.businesses.value.size
                 "ক্লাউড থেকে $count টি দোকানের তথ্য সফলভাবে আপডেট হয়েছে।"
             } else {
-                result.exceptionOrNull()?.message ?: "দোকানের তথ্য লোড করতে সমস্যা হয়েছে।"
+                val raw = result.exceptionOrNull()?.message ?: ""
+                if (raw.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    "অনুমোদন ত্রুটি (PERMISSION_DENIED): ক্লাউড ডেটাবেস থেকে সকল দোকানের তথ্য দেখতে অনুমোদিত সুপার এডমিন গুগল একাউন্টে সাইন-ইন নিশ্চিত করুন।"
+                } else {
+                    "দোকানের তথ্য লোড করতে সমস্যা হয়েছে: ${result.exceptionOrNull()?.localizedMessage ?: "নেটওয়ার্ক ত্রুটি"}"
+                }
             }
             _uiState.update {
                 it.copy(

@@ -264,29 +264,82 @@ fun SuperAdminDashboardScreen(
             }
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (uiState.selectedTab) {
-                SuperAdminTab.OVERVIEW -> {
-                    SuperAdminOverviewTab(
-                        stats = stats,
-                        onNavigateToBusinesses = { viewModel.selectTab(SuperAdminTab.BUSINESSES) },
-                        onNavigateToPayments = { viewModel.selectTab(SuperAdminTab.PAYMENTS) }
-                    )
+            // Live Feedback Banner
+            if (uiState.errorMessage != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth().clickable { viewModel.clearFeedback() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = uiState.errorMessage ?: "",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { viewModel.clearFeedback() }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "বন্ধ করুন", modifier = Modifier.size(16.dp))
+                        }
+                    }
                 }
-                SuperAdminTab.BUSINESSES -> {
-                    SuperAdminBusinessesTab(
-                        businesses = businesses,
-                        searchQuery = uiState.searchQuery,
-                        statusFilter = uiState.businessStatusFilter,
-                        onSearchChange = { viewModel.updateSearchQuery(it) },
-                        onStatusFilterChange = { viewModel.setBusinessStatusFilter(it) },
-                        onManageBusiness = { businessToManage = it }
-                    )
+            } else if (uiState.successMessage != null) {
+                Surface(
+                    color = Color(0xFFE8F5E9),
+                    modifier = Modifier.fillMaxWidth().clickable { viewModel.clearFeedback() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = uiState.successMessage ?: "",
+                            color = Color(0xFF1B5E20),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { viewModel.clearFeedback() }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "বন্ধ করুন", modifier = Modifier.size(16.dp), tint = Color(0xFF1B5E20))
+                        }
+                    }
                 }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                when (uiState.selectedTab) {
+                    SuperAdminTab.OVERVIEW -> {
+                        SuperAdminOverviewTab(
+                            stats = stats,
+                            onNavigateToBusinesses = { viewModel.selectTab(SuperAdminTab.BUSINESSES) },
+                            onNavigateToPayments = { viewModel.selectTab(SuperAdminTab.PAYMENTS) }
+                        )
+                    }
+                    SuperAdminTab.BUSINESSES -> {
+                        SuperAdminBusinessesTab(
+                            businesses = businesses,
+                            searchQuery = uiState.searchQuery,
+                            statusFilter = uiState.businessStatusFilter,
+                            onSearchChange = { viewModel.updateSearchQuery(it) },
+                            onStatusFilterChange = { viewModel.setBusinessStatusFilter(it) },
+                            onManageBusiness = { businessToManage = it },
+                            onRefresh = { viewModel.refreshBusinesses() }
+                        )
+                    }
                 SuperAdminTab.PLANS -> {
                     SuperAdminPlansTab(
                         plans = plans,

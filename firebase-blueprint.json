@@ -165,6 +165,12 @@
     "/businesses/{businessId}/tombstones/{tombstoneId}": {
       "schema": { "$ref": "#/entities/Tombstone" },
       "description": "Cross-device deletion synchronization tombstones"
+    },
+    "/businesses/{businessId}": {
+      "description": "Platform business registration profiles"
+    },
+    "/registered_phones/{phone}": {
+      "description": "Global phone number registry for duplicate shop registration prevention"
     }
   }
 }

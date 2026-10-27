@@ -255,11 +255,19 @@ service cloud.firestore {
 
       match /staff_by_email/{email} {
         allow get: if isSignedIn() && (
-          (request.auth.token.email != null && request.auth.token.email.lower() == email.lower()) ||
+          (request.auth.token.email != null && (request.auth.token.email == email || request.auth.token.email.matches('(?i)^' + email + '$'))) ||
           isBusinessOwner(businessId)
         );
         allow list, create, update, delete: if isBusinessOwner(businessId);
       }
+    }
+
+    // Registered phones index for unique registration verification across all devices
+    match /registered_phones/{phone} {
+      allow get: if true;
+      allow list: if isSuperAdmin();
+      allow create: if isValidId(phone) && incoming().phone == phone && incoming().businessId is string;
+      allow update, delete: if isSuperAdmin();
     }
 
     // Staff memberships index to allow salesmen and admins on separate devices to resolve their authorized businessId

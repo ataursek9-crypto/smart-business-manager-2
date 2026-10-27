@@ -977,39 +977,33 @@ class SuperAdminRepository(
      * Registers a new shop in the Super Admin repository and syncs to cloud if connected.
      * Guaranteed to appear in the Super Admin Console immediately.
      */
-    suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
-        val currentList = _businesses.value.toMutableList()
-        val existingIndex = currentList.indexOfFirst {
-            it.id == business.id || (it.ownerPhone == business.ownerPhone && business.ownerPhone.isNotBlank())
+    suspend fun checkPhoneRegisteredRemote(phone: String): Boolean {
+        if (!isFirebaseConfigured() || phone.isBlank()) return false
+        return try {
+            val doc = FirebaseFirestore.getInstance().collection("registered_phones").document(phone).get().await()
+            doc.exists()
+        } catch (e: Exception) {
+            Log.w(TAG, "checkPhoneRegisteredRemote check error: ${e.message}")
+            false
         }
-        if (existingIndex >= 0) {
-            currentList[existingIndex] = business
-        } else {
-            currentList.add(0, business)
-        }
-        _businesses.value = currentList
-        saveBusinessesLocally(currentList)
+    }
 
-        recordAuditLog(
-            actorUid = business.ownerUid,
-            actorName = business.ownerName,
-            actorEmail = business.ownerEmail.ifBlank { "shop_owner" },
-            action = "নতুন দোকান রেজিস্ট্রেশন",
-            targetBusinessId = business.id,
-            targetBusinessName = business.businessName,
-            details = "দোকান: ${business.businessName}, মালিক: ${business.ownerName}, মোবাইল: ${business.ownerPhone}, ধরন: ${business.businessType}, ঠিকানা: ${business.address} (পলিসি: সম্পূর্ণ ফ্রি ব্যবহার)"
-        )
+    suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
+        val cleanPhone = business.ownerPhone.trim()
 
         if (isFirebaseConfigured()) {
             try {
-                val data = mapOf(
+                val firestore = FirebaseFirestore.getInstance()
+
+                // 1. Write the main business registration document directly to central Cloud Firestore
+                val data = mutableMapOf<String, Any?>(
                     "id" to business.id,
                     "name" to business.businessName,
                     "businessName" to business.businessName,
                     "ownerUid" to business.ownerUid,
                     "ownerName" to business.ownerName,
-                    "ownerPhone" to business.ownerPhone,
-                    "phone" to business.ownerPhone,
+                    "ownerPhone" to cleanPhone,
+                    "phone" to cleanPhone,
                     "status" to business.status.name,
                     "planId" to business.planId,
                     "planName" to business.planName,
@@ -1027,15 +1021,62 @@ class SuperAdminRepository(
                     "activeDaysCount" to business.activeDaysCount,
                     "phoneVerified" to business.phoneVerified,
                     "scheduledPolicyChange" to business.scheduledPolicyChange,
-                    "scheduledPolicyEffectiveAt" to business.scheduledPolicyEffectiveAt,
                     "notes" to business.notes
                 )
-                FirebaseFirestore.getInstance().collection("businesses").document(business.id)
+                if (business.scheduledPolicyEffectiveAt != null) {
+                    data["scheduledPolicyEffectiveAt"] = business.scheduledPolicyEffectiveAt
+                }
+
+                firestore.collection("businesses").document(business.id)
                     .set(data, SetOptions.merge()).await()
+
+                // 2. Index the registered phone in registered_phones collection for cross-device duplicate detection
+                if (cleanPhone.isNotBlank()) {
+                    val phoneDocData = mapOf(
+                        "phone" to cleanPhone,
+                        "businessId" to business.id,
+                        "businessName" to business.businessName,
+                        "ownerName" to business.ownerName,
+                        "createdAt" to business.createdAt
+                    )
+                    try {
+                        firestore.collection("registered_phones").document(cleanPhone)
+                            .set(phoneDocData, SetOptions.merge()).await()
+                    } catch (pe: Exception) {
+                        Log.w(TAG, "registered_phones indexing non-fatal: ${pe.message}")
+                    }
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "registerNewShop remote write note: ${e.message}")
+                Log.e(TAG, "registerNewShop server save failed: ${e.message}", e)
+                return Result.failure(e)
             }
         }
+
+        // Successfully written to server or server not configured -> update local memory and cache
+        val currentList = _businesses.value.toMutableList()
+        val existingIndex = currentList.indexOfFirst {
+            it.id == business.id || (it.ownerPhone == business.ownerPhone && business.ownerPhone.isNotBlank())
+        }
+        if (existingIndex >= 0) {
+            currentList[existingIndex] = business
+        } else {
+            currentList.add(0, business)
+        }
+        _businesses.value = currentList
+        saveBusinessesLocally(currentList)
+
+        try {
+            recordAuditLog(
+                actorUid = business.ownerUid,
+                actorName = business.ownerName,
+                actorEmail = business.ownerEmail.ifBlank { "shop_owner" },
+                action = "নতুন দোকান রেজিস্ট্রেশন",
+                targetBusinessId = business.id,
+                targetBusinessName = business.businessName,
+                details = "দোকান: ${business.businessName}, মালিক: ${business.ownerName}, মোবাইল: ${business.ownerPhone}, ধরন: ${business.businessType}, ঠিকানা: ${business.address} (পলিসি: সম্পূর্ণ ফ্রি ব্যবহার)"
+            )
+        } catch (_: Exception) {}
+
         return Result.success(business)
     }
 

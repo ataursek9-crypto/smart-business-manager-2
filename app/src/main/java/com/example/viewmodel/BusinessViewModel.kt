@@ -1092,22 +1092,15 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 if (superAdminRepo.isFirebaseConfigured()) {
-                    try {
-                        val querySnapshot = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                            .collection("businesses")
-                            .whereEqualTo("ownerPhone", normalizedPhone)
-                            .limit(1)
-                            .get()
-                            .await()
-                        if (!querySnapshot.isEmpty) {
-                            onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
-                            return@launch
-                        }
-                    } catch (_: Exception) {}
+                    val isAlreadyRegistered = superAdminRepo.checkPhoneRegisteredRemote(normalizedPhone)
+                    if (isAlreadyRegistered) {
+                        onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
+                        return@launch
+                    }
                 }
 
                 // Generate unique Shop ID for platform and local database isolation
-                val shopId = "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}"
+                val shopId = "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
 
                 val repoResult = repository.registerNewShop(
                     shopName = shopName,
@@ -1153,7 +1146,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
 
                 // Register into SuperAdminRepository and sync directly to Cloud Firestore backend
-                superAdminRepo.registerNewShop(platformBiz)
+                val cloudResult = superAdminRepo.registerNewShop(platformBiz)
+                if (cloudResult.isFailure && superAdminRepo.isFirebaseConfigured()) {
+                    val err = cloudResult.exceptionOrNull()
+                    val errorMsg = "সার্ভারে দোকান সংরক্ষণ ব্যর্থ হয়েছে! অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন (${err?.localizedMessage ?: "ক্লাউড সংরক্ষণ ত্রুটি"})"
+                    onResult(false, errorMsg, null)
+                    return@launch
+                }
 
                 // Link Google credentials if provided
                 if (ownerUid.isNotBlank() || ownerEmail.isNotBlank()) {
