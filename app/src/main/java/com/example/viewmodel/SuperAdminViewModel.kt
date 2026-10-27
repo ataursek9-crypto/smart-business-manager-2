@@ -75,7 +75,10 @@ class SuperAdminViewModel @JvmOverloads constructor(
                     b.businessName.lowercase().contains(query) ||
                     b.ownerName.lowercase().contains(query) ||
                     b.ownerPhone.contains(query) ||
-                    b.id.lowercase().contains(query)
+                    b.id.lowercase().contains(query) ||
+                    b.businessType.lowercase().contains(query) ||
+                    b.address.lowercase().contains(query) ||
+                    b.district.lowercase().contains(query)
 
             val matchesStatus = state.businessStatusFilter == null || b.status == state.businessStatusFilter
 
@@ -217,6 +220,41 @@ class SuperAdminViewModel @JvmOverloads constructor(
                 it.copy(
                     isLoading = false,
                     successMessage = if (res.isSuccess) "'${business.businessName}'-এর প্ল্যান সফলভাবে আপডেট করা হয়েছে।" else null,
+                    errorMessage = res.exceptionOrNull()?.message
+                )
+            }
+        }
+    }
+
+    /**
+     * Send or update a subscription fee proposal notice to a business without cutting free access.
+     */
+    fun sendSubscriptionNotice(
+        business: PlatformBusiness,
+        proposedFee: Double,
+        proposedStartDate: Long?,
+        reminderDate: Long?,
+        note: String,
+        actorUid: String,
+        actorName: String,
+        actorEmail: String
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val res = repository.sendSubscriptionNotice(
+                businessId = business.id,
+                proposedFee = proposedFee,
+                proposedStartDate = proposedStartDate,
+                reminderDate = reminderDate,
+                note = note,
+                actorUid = actorUid,
+                actorName = actorName,
+                actorEmail = actorEmail
+            )
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    successMessage = if (res.isSuccess) "'${business.businessName}'-এর জন্য সাবস্ক্রিপশন নোটিশ সফলভাবে প্রেরণ করা হয়েছে।" else null,
                     errorMessage = res.exceptionOrNull()?.message
                 )
             }

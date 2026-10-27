@@ -44,20 +44,38 @@ data class PlatformBusiness(
     val businessName: String,
     val ownerUid: String,
     val ownerName: String,
-    val ownerEmail: String,
+    val ownerEmail: String = "",
     val ownerPhone: String,
     val status: BusinessAccountStatus = BusinessAccountStatus.ACTIVE,
     val statusReason: String = "",
     val planId: String = "plan_free",
-    val planName: String = "ফ্রি ট্রায়াল",
-    val subscriptionStatus: SubscriptionStatus = SubscriptionStatus.TRIAL,
-    val subscriptionExpiresAt: Long = System.currentTimeMillis() + (30L * 24 * 60 * 60 * 1000), // Default 30 days
+    val planName: String = "সম্পূর্ণ ফ্রি ব্যবহার",
+    val subscriptionStatus: SubscriptionStatus = SubscriptionStatus.ACTIVE,
+    val subscriptionExpiresAt: Long = 0L, // 0L indicates no automatic expiration (perpetual free)
     val staffCount: Int = 1,
     val maxStaffAllowed: Int = 2,
     val createdAt: Long = System.currentTimeMillis(),
     val lastActiveAt: Long = System.currentTimeMillis(),
-    val notes: String = ""
-)
+    val notes: String = "",
+    // Extended shop registration & platform management fields
+    val businessType: String = "সাধারণ ব্যবসা",
+    val address: String = "",
+    val district: String = "",
+    val isAutoExpiryDisabled: Boolean = true, // Default Free Policy: Automatic expiry strictly disabled
+    val activeDaysCount: Int = 1,
+    // Subscription Fee Proposal / Notice from Super Admin
+    val proposedFee: Double = 0.0,
+    val proposedStartDate: Long? = null,
+    val noticeReminderDate: Long? = null,
+    val subscriptionNoticeNote: String = "",
+    val hasActiveNotice: Boolean = false
+) {
+    val elapsedDays: Long
+        get() = ((System.currentTimeMillis() - createdAt) / (24L * 60 * 60 * 1000)).coerceAtLeast(0L)
+
+    val activeDays: Long
+        get() = activeDaysCount.toLong().coerceAtLeast(1L)
+}
 
 /**
  * Configurable Platform Subscription Plan.

@@ -212,14 +212,24 @@ class SuperAdminRepository(
                             val statusStr = doc.getString("status") ?: "ACTIVE"
                             val status = try { BusinessAccountStatus.valueOf(statusStr) } catch (_: Exception) { BusinessAccountStatus.ACTIVE }
                             val planId = doc.getString("planId") ?: "plan_free"
-                            val planName = doc.getString("planName") ?: "ফ্রি ট্রায়াল"
+                            val planName = doc.getString("planName") ?: "সম্পূর্ণ ফ্রি ব্যবহার"
                             val subStatusStr = doc.getString("subscriptionStatus") ?: "ACTIVE"
                             val subStatus = try { SubscriptionStatus.valueOf(subStatusStr) } catch (_: Exception) { SubscriptionStatus.ACTIVE }
-                            val expiresAt = doc.getLong("subscriptionExpiresAt") ?: (System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000)
+                            val expiresAt = doc.getLong("subscriptionExpiresAt") ?: 0L
                             val staffCount = (doc.getLong("staffCount") ?: 1).toInt()
                             val maxStaff = (doc.getLong("maxStaffAllowed") ?: 5).toInt()
                             val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
                             val lastActiveAt = doc.getLong("lastActiveAt") ?: System.currentTimeMillis()
+                            val businessType = doc.getString("businessType") ?: "সাধারণ ব্যবসা"
+                            val address = doc.getString("address") ?: ""
+                            val district = doc.getString("district") ?: ""
+                            val isAutoExpiryDisabled = doc.getBoolean("isAutoExpiryDisabled") ?: true
+                            val activeDaysCount = (doc.getLong("activeDaysCount") ?: 1).toInt()
+                            val proposedFee = doc.getDouble("proposedFee") ?: 0.0
+                            val proposedStartDate = doc.getLong("proposedStartDate")
+                            val noticeReminderDate = doc.getLong("noticeReminderDate")
+                            val subscriptionNoticeNote = doc.getString("subscriptionNoticeNote") ?: ""
+                            val hasActiveNotice = doc.getBoolean("hasActiveNotice") ?: (proposedFee > 0.0)
 
                             PlatformBusiness(
                                 id = id,
@@ -238,7 +248,17 @@ class SuperAdminRepository(
                                 maxStaffAllowed = maxStaff,
                                 createdAt = createdAt,
                                 lastActiveAt = lastActiveAt,
-                                notes = doc.getString("notes") ?: ""
+                                notes = doc.getString("notes") ?: "",
+                                businessType = businessType,
+                                address = address,
+                                district = district,
+                                isAutoExpiryDisabled = isAutoExpiryDisabled,
+                                activeDaysCount = activeDaysCount,
+                                proposedFee = proposedFee,
+                                proposedStartDate = proposedStartDate,
+                                noticeReminderDate = noticeReminderDate,
+                                subscriptionNoticeNote = subscriptionNoticeNote,
+                                hasActiveNotice = hasActiveNotice
                             )
                         } catch (_: Exception) {
                             null
@@ -329,18 +349,20 @@ class SuperAdminRepository(
             SubscriptionPlan(
                 id = "plan_free",
                 code = "FREE",
-                name = "Free Trial",
-                nameBn = "ফ্রি ট্রায়াল",
-                descriptionBn = "নতুন ব্যবসার জন্য বিনামূল্যে ট্রায়াল প্যাক।",
+                name = "Free Perpetual",
+                nameBn = "সম্পূর্ণ ফ্রি ব্যবহার",
+                descriptionBn = "নতুন ব্যবসার জন্য আজীবন বিনামূল্যে সকল মৌলিক ফিচার।",
                 priceMonthly = 0.0,
                 priceYearly = 0.0,
                 maxStaff = 2,
                 maxProducts = 100,
                 features = listOf(
+                    "বর্তমান পলিসি: সম্পূর্ণ ফ্রি ব্যবহার",
                     "দৈনিক বেচাকেনা ও রসিদ তৈরি",
                     "কাস্টমার বাকি হিসাব খাতা",
                     "মৌলিক লাভ-ক্ষতি প্রতিবেদন",
-                    "১ জন অ্যাডমিন ও ১ জন সেলসম্যান"
+                    "১ জন অ্যাডমিন ও ১ জন সেলসম্যান",
+                    "কোনো জোরপূর্বক মেয়াদোত্তীর্ণ বা অটো-পেমেন্ট নেই"
                 ),
                 isPopular = false,
                 isActive = true
@@ -729,6 +751,135 @@ class SuperAdminRepository(
     }
 
     /**
+     * Registers a new shop in the Super Admin repository and syncs to cloud if connected.
+     * Guaranteed to appear in the Super Admin Console immediately.
+     */
+    suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
+        val currentList = _businesses.value.toMutableList()
+        val existingIndex = currentList.indexOfFirst { it.id == business.id }
+        if (existingIndex >= 0) {
+            currentList[existingIndex] = business
+        } else {
+            currentList.add(0, business)
+        }
+        _businesses.value = currentList
+
+        recordAuditLog(
+            actorUid = business.ownerUid,
+            actorName = business.ownerName,
+            actorEmail = business.ownerEmail.ifBlank { "shop_owner" },
+            action = "নতুন দোকান রেজিস্ট্রেশন",
+            targetBusinessId = business.id,
+            targetBusinessName = business.businessName,
+            details = "দোকান: ${business.businessName}, মালিক: ${business.ownerName}, মোবাইল: ${business.ownerPhone}, ধরন: ${business.businessType}, ঠিকানা: ${business.address} (পলিসি: সম্পূর্ণ ফ্রি ব্যবহার)"
+        )
+
+        if (isFirebaseConfigured()) {
+            try {
+                val data = mapOf(
+                    "id" to business.id,
+                    "name" to business.businessName,
+                    "businessName" to business.businessName,
+                    "ownerUid" to business.ownerUid,
+                    "ownerName" to business.ownerName,
+                    "ownerPhone" to business.ownerPhone,
+                    "phone" to business.ownerPhone,
+                    "status" to business.status.name,
+                    "planId" to business.planId,
+                    "planName" to business.planName,
+                    "subscriptionStatus" to business.subscriptionStatus.name,
+                    "subscriptionExpiresAt" to business.subscriptionExpiresAt,
+                    "staffCount" to business.staffCount,
+                    "maxStaffAllowed" to business.maxStaffAllowed,
+                    "createdAt" to business.createdAt,
+                    "lastActiveAt" to business.lastActiveAt,
+                    "businessType" to business.businessType,
+                    "address" to business.address,
+                    "district" to business.district,
+                    "isAutoExpiryDisabled" to business.isAutoExpiryDisabled,
+                    "activeDaysCount" to business.activeDaysCount,
+                    "notes" to business.notes
+                )
+                FirebaseFirestore.getInstance().collection("businesses").document(business.id)
+                    .set(data, SetOptions.merge()).await()
+            } catch (e: Exception) {
+                Log.w(TAG, "registerNewShop remote write note: ${e.message}")
+            }
+        }
+        return Result.success(business)
+    }
+
+    /**
+     * Sends or updates a subscription proposal / notice to a shop.
+     * Strictly acts as an informative notice or proposal without cutting or interrupting free access.
+     */
+    suspend fun sendSubscriptionNotice(
+        businessId: String,
+        proposedFee: Double,
+        proposedStartDate: Long?,
+        reminderDate: Long?,
+        note: String,
+        actorUid: String,
+        actorName: String,
+        actorEmail: String
+    ): Result<Unit> {
+        val currentList = _businesses.value.toMutableList()
+        val index = currentList.indexOfFirst { it.id == businessId }
+        if (index == -1) {
+            return Result.failure(IllegalArgumentException("ব্যবসা প্রতিষ্ঠানটি খুঁজে পাওয়া যায়নি!"))
+        }
+
+        val target = currentList[index]
+        val updated = target.copy(
+            proposedFee = proposedFee,
+            proposedStartDate = proposedStartDate,
+            noticeReminderDate = reminderDate,
+            subscriptionNoticeNote = note,
+            hasActiveNotice = true,
+            lastActiveAt = System.currentTimeMillis()
+        )
+        currentList[index] = updated
+        _businesses.value = currentList
+
+        val startDateStr = if (proposedStartDate != null) {
+            java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("bn", "BD")).format(java.util.Date(proposedStartDate))
+        } else "উন্মুক্ত"
+        val reminderDateStr = if (reminderDate != null) {
+            java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("bn", "BD")).format(java.util.Date(reminderDate))
+        } else "নির্ধারিত নয়"
+
+        recordAuditLog(
+            actorUid = actorUid,
+            actorName = actorName,
+            actorEmail = actorEmail,
+            action = "সাবস্ক্রিপশন ফি নোটিশ প্রেরণ",
+            targetBusinessId = businessId,
+            targetBusinessName = target.businessName,
+            details = "প্রস্তাবিত ফি: ৳$proposedFee, কার্যকরের তারিখ: $startDateStr, রিমাইন্ডার: $reminderDateStr, নোট: $note (দোকানের ফ্রি অ্যাক্সেস পূর্ণ বহাল থাকবে)"
+        )
+
+        if (isFirebaseConfigured()) {
+            try {
+                FirebaseFirestore.getInstance().collection("businesses").document(businessId)
+                    .set(
+                        mapOf(
+                            "proposedFee" to proposedFee,
+                            "proposedStartDate" to proposedStartDate,
+                            "noticeReminderDate" to reminderDate,
+                            "subscriptionNoticeNote" to note,
+                            "hasActiveNotice" to true,
+                            "lastActiveAt" to System.currentTimeMillis()
+                        ),
+                        SetOptions.merge()
+                    ).await()
+            } catch (e: Exception) {
+                Log.w(TAG, "sendSubscriptionNotice remote note: ${e.message}")
+            }
+        }
+        return Result.success(Unit)
+    }
+
+    /**
      * Generates aggregated platform overview metrics.
      */
     fun computeOverviewStats(): PlatformOverviewStats {
@@ -742,9 +893,12 @@ class SuperAdminRepository(
         val now = System.currentTimeMillis()
         val sevenDaysMs = 7L * 24 * 60 * 60 * 1000
 
-        val activeSubs = bList.count { it.subscriptionStatus == SubscriptionStatus.ACTIVE && it.subscriptionExpiresAt > now }
-        val expiringSubs = bList.count { it.subscriptionExpiresAt in now..(now + sevenDaysMs) }
-        val expiredSubs = bList.count { it.subscriptionExpiresAt < now }
+        val activeSubs = bList.count {
+            it.subscriptionStatus == SubscriptionStatus.ACTIVE &&
+            (it.isAutoExpiryDisabled || it.subscriptionExpiresAt > now)
+        }
+        val expiringSubs = bList.count { !it.isAutoExpiryDisabled && it.subscriptionExpiresAt in now..(now + sevenDaysMs) }
+        val expiredSubs = bList.count { !it.isAutoExpiryDisabled && it.subscriptionExpiresAt < now }
 
         val pendingPay = pList.count { it.status == PlatformPaymentStatus.PENDING }
         val verifiedRev = pList.filter { it.status == PlatformPaymentStatus.APPROVED }.sumOf { it.amount }

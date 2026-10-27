@@ -127,6 +127,7 @@ fun SuperAdminDashboardScreen(
     var businessToManage by remember { mutableStateOf<PlatformBusiness?>(null) }
     var businessToSuspend by remember { mutableStateOf<PlatformBusiness?>(null) }
     var businessToChangePlan by remember { mutableStateOf<PlatformBusiness?>(null) }
+    var businessToSendNotice by remember { mutableStateOf<PlatformBusiness?>(null) }
     var paymentToReview by remember { mutableStateOf<PlatformPayment?>(null) }
     var planToEdit by remember { mutableStateOf<SubscriptionPlan?>(null) }
 
@@ -319,29 +320,62 @@ fun SuperAdminDashboardScreen(
             icon = { Icon(Icons.Default.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
             title = { Text(b.businessName, fontWeight = FontWeight.Bold) },
             text = {
-                val dateFormat = remember { SimpleDateFormat("dd MMM yyyy", Locale("bn", "BD")) }
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale("bn", "BD")) }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("বিজনেস আইডি: ${b.id}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     Text("মালিক: ${b.ownerName} (${b.ownerPhone})")
                     if (b.ownerEmail.isNotBlank()) Text("ইমেইল: ${b.ownerEmail}", fontSize = 13.sp)
+                    Text("ব্যবসার ধরন: ${b.businessType}", fontWeight = FontWeight.Medium)
+                    if (b.address.isNotBlank() || b.district.isNotBlank()) {
+                        Text("ঠিকানা: ${b.address}${if (b.district.isNotBlank()) ", ${b.district}" else ""}", fontSize = 12.sp)
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         BusinessStatusBadge(b.status)
                         SubscriptionStatusBadge(b.subscriptionStatus)
                     }
                     Text("বর্তমান প্ল্যান: ${b.planName} (কর্মী সীমা: ${b.maxStaffAllowed})")
-                    Text("মেয়াদ শেষ: ${dateFormat.format(Date(b.subscriptionExpiresAt))}", fontWeight = FontWeight.SemiBold)
+                    Text("রেজিস্ট্রেশন: ${dateFormat.format(Date(b.createdAt))}", fontSize = 12.sp)
+                    Text("ব্যবহৃত দিন (Elapsed): ${BengaliFormatter.formatNumber(b.elapsedDays)} দিন  •  সক্রিয় দিন (Active): ${BengaliFormatter.formatNumber(b.activeDays)} দিন", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    if (b.isAutoExpiryDisabled) {
+                        Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(6.dp)) {
+                            Text("বর্তমান পলিসি: সম্পূর্ণ ফ্রি ব্যবহার (অটো-এক্সপায়ার বন্ধ)", color = Color(0xFF2E7D32), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
+                    } else {
+                        Text("মেয়াদ শেষ: ${dateFormat.format(Date(b.subscriptionExpiresAt))}", fontWeight = FontWeight.SemiBold)
+                    }
+                    if (b.hasActiveNotice) {
+                        Surface(color = Color(0xFFFFF3E0), shape = RoundedCornerShape(6.dp)) {
+                            Text("প্রস্তাবিত মাসিক ফি: ৳${BengaliFormatter.formatCurrency(b.proposedFee)}${if (b.subscriptionNoticeNote.isNotBlank()) " | নোট: ${b.subscriptionNoticeNote}" else ""}", color = Color(0xFFE65100), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
+                    }
                     if (b.statusReason.isNotBlank()) {
                         Text("নোট / কারণ: ${b.statusReason}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
             confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        businessToChangePlan = b
-                        businessToManage = null
-                    }) {
-                        Text("প্ল্যান পরিবর্তন")
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
+                                businessToSendNotice = b
+                                businessToManage = null
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("নোটিশ পাঠান", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                businessToChangePlan = b
+                                businessToManage = null
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("প্ল্যান পরিবর্তন", fontSize = 12.sp)
+                        }
                     }
                     if (b.status == BusinessAccountStatus.ACTIVE) {
                         Button(
@@ -349,9 +383,10 @@ fun SuperAdminDashboardScreen(
                                 businessToSuspend = b
                                 businessToManage = null
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("স্থগিত করুন")
+                            Text("সাময়িক স্থগিত করুন")
                         }
                     } else {
                         Button(
@@ -359,7 +394,8 @@ fun SuperAdminDashboardScreen(
                                 viewModel.activateBusiness(b, actorUid, actorName, currentSuperAdminEmail)
                                 businessToManage = null
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("সক্রিয় করুন")
                         }
@@ -369,6 +405,27 @@ fun SuperAdminDashboardScreen(
             dismissButton = {
                 TextButton(onClick = { businessToManage = null }) { Text("বন্ধ করুন") }
             }
+        )
+    }
+
+    // Notice Dialog
+    businessToSendNotice?.let { b ->
+        SendSubscriptionNoticeDialog(
+            business = b,
+            onConfirm = { proposedFee, startDate, reminderDate, note ->
+                viewModel.sendSubscriptionNotice(
+                    business = b,
+                    proposedFee = proposedFee,
+                    proposedStartDate = startDate,
+                    reminderDate = reminderDate,
+                    note = note,
+                    actorUid = actorUid,
+                    actorName = actorName,
+                    actorEmail = currentSuperAdminEmail
+                )
+                businessToSendNotice = null
+            },
+            onDismiss = { businessToSendNotice = null }
         )
     }
 
@@ -520,6 +577,43 @@ fun SuperAdminOverviewTab(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = Color.White)
+                    }
+                }
+            }
+        }
+
+        item {
+            // Default Free Policy Live Status Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Verified,
+                        contentDescription = null,
+                        tint = Color(0xFF2E7D32),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "বর্তমান পলিসি: সম্পূর্ণ ফ্রি ব্যবহার সক্রিয়",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color(0xFF1B5E20)
+                        )
+                        Text(
+                            text = "সকল নিবন্ধিত দোকানদার কোনো জোরপূর্বক মেয়াদোত্তীর্ণ বা বাধ্যবাধকতা ছাড়াই আজীবন মৌলিক হিসাব-নিকাশ বিনামূল্যে ব্যবহার করতে পারছেন।",
+                            fontSize = 11.sp,
+                            color = Color(0xFF2E7D32),
+                            lineHeight = 15.sp
+                        )
                     }
                 }
             }
@@ -727,11 +821,45 @@ fun SuperAdminBusinessesTab(
                                 )
                                 BusinessStatusBadge(b.status)
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = b.businessType,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                if (b.district.isNotBlank() || b.address.isNotBlank()) {
+                                    Text(
+                                        text = "• ${if (b.district.isNotBlank()) b.district else b.address}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "মালিক: ${b.ownerName} • ${b.ownerPhone}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "ব্যবহৃত দিন: ${BengaliFormatter.formatNumber(b.elapsedDays)} দিন  |  সক্রিয় দিন: ${BengaliFormatter.formatNumber(b.activeDays)} দিন",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(
@@ -739,18 +867,33 @@ fun SuperAdminBusinessesTab(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                                     SubscriptionStatusBadge(b.subscriptionStatus)
                                     Surface(
-                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        color = if (b.isAutoExpiryDisabled) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.secondaryContainer,
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
                                         Text(
-                                            text = b.planName,
+                                            text = if (b.isAutoExpiryDisabled) "সম্পূর্ণ ফ্রি ব্যবহার" else b.planName,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
+                                            color = if (b.isAutoExpiryDisabled) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSecondaryContainer,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
+                                    }
+                                    if (b.hasActiveNotice) {
+                                        Surface(
+                                            color = Color(0xFFFFF3E0),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "প্রস্তাবিত: ৳${BengaliFormatter.formatCurrency(b.proposedFee)}",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFE65100),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
                                     }
                                 }
                                 TextButton(onClick = { onManageBusiness(b) }) {
@@ -1147,3 +1290,130 @@ fun SuperAdminSettingsTab(
         }
     }
 }
+
+@Composable
+fun SendSubscriptionNoticeDialog(
+    business: PlatformBusiness,
+    onConfirm: (Double, Long?, Long?, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var feeStr by remember { mutableStateOf(if (business.proposedFee > 0.0) business.proposedFee.toInt().toString() else "500") }
+    var effectiveDaysStr by remember { mutableStateOf("30") }
+    var reminderDaysStr by remember { mutableStateOf("15") }
+    var note by remember { mutableStateOf(business.subscriptionNoticeNote.ifBlank { "ভবিষ্যতে প্রো ফিচারের জন্য প্রস্তাবিত সাবস্ক্রিপশন প্যাকেজ।" }) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(36.dp))
+        },
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("সাবস্ক্রিপশন নোটিশ / প্রস্তাবনা", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Text(business.businessName, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                // Non-blocking Policy Notice Banner
+                Surface(
+                    color = Color(0xFFE8F5E9),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "সতর্কতা: এই নোটিশ শুধুমাত্র প্রস্তাবনা বা বার্তা হিসেবে যাবে। এটি কোনো অবস্থাতেই দোকানদারের ফ্রি ব্যবহারে স্বয়ংক্রিয় বাধা দেবে না এবং কোনো টাকা কাটবে না।",
+                            fontSize = 11.sp,
+                            color = Color(0xFF1B5E20),
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = feeStr,
+                    onValueChange = {
+                        feeStr = it.filter { c -> c.isDigit() }
+                        errorMessage = ""
+                    },
+                    label = { Text("প্রস্তাবিত মাসিক ফি (৳) *") },
+                    placeholder = { Text("যেমন: ৫০০") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("notice_fee_input")
+                )
+
+                OutlinedTextField(
+                    value = effectiveDaysStr,
+                    onValueChange = { effectiveDaysStr = it.filter { c -> c.isDigit() } },
+                    label = { Text("প্রস্তাবিত কার্যকরের সময় (কত দিন পর)") },
+                    placeholder = { Text("যেমন: ৩০") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("notice_effective_days_input")
+                )
+
+                OutlinedTextField(
+                    value = reminderDaysStr,
+                    onValueChange = { reminderDaysStr = it.filter { c -> c.isDigit() } },
+                    label = { Text("রিমাইন্ডার পাঠানোর সময় (কত দিন পর)") },
+                    placeholder = { Text("যেমন: ১৫") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("notice_reminder_days_input")
+                )
+
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("বিশেষ বার্তা / নোট") },
+                    placeholder = { Text("দোকানদারের উদ্দেশ্যে বিশেষ বার্তা লিখুন...") },
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth().testTag("notice_note_input")
+                )
+
+                if (errorMessage.isNotBlank()) {
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val fee = feeStr.toDoubleOrNull() ?: 0.0
+                    if (fee <= 0.0) {
+                        errorMessage = "সঠিক প্রস্তাবিত ফি নির্ধারণ করুন!"
+                        return@Button
+                    }
+                    val effectiveDays = effectiveDaysStr.toLongOrNull() ?: 30L
+                    val reminderDays = reminderDaysStr.toLongOrNull() ?: 15L
+
+                    val startDate = System.currentTimeMillis() + (effectiveDays * 24L * 60 * 60 * 1000)
+                    val reminderDate = System.currentTimeMillis() + (reminderDays * 24L * 60 * 60 * 1000)
+
+                    onConfirm(fee, startDate, reminderDate, note.trim())
+                },
+                modifier = Modifier.testTag("confirm_send_notice_button")
+            ) {
+                Text("নোটিশ প্রেরণ করুন")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("বাতিল")
+            }
+        }
+    )
+}
+

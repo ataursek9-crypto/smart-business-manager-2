@@ -956,6 +956,108 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * Registers a new shop with the owner as Admin.
+     * Prevents duplicate phone registration.
+     * Hashes PIN securely (SHA-256).
+     * Connects directly with Platform Super Admin repository with Default Free Policy.
+     */
+    fun registerNewShop(
+        shopName: String,
+        ownerName: String,
+        phone: String,
+        address: String,
+        district: String,
+        businessType: String,
+        pin: String,
+        superAdminViewModel: SuperAdminViewModel? = null,
+        onResult: (Boolean, String, String?) -> Unit // success, message, shopId
+    ) {
+        viewModelScope.launch {
+            try {
+                // Normalize Bengali digits (০-৯) to standard digits (0-9)
+                val normalizedPhone = phone.trim()
+                    .replace('০', '0').replace('১', '1').replace('২', '2')
+                    .replace('৩', '3').replace('৪', '4').replace('৫', '5')
+                    .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
+                val normalizedPin = pin.trim()
+                    .replace('০', '0').replace('১', '1').replace('২', '2')
+                    .replace('৩', '3').replace('৪', '4').replace('৫', '5')
+                    .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
+
+                // Check duplicate in Super Admin businesses state if available
+                val existingInSuperAdmin = superAdminViewModel?.rawBusinesses?.value?.any {
+                    it.ownerPhone == normalizedPhone
+                } == true
+                if (existingInSuperAdmin) {
+                    onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
+                    return@launch
+                }
+
+                val repoResult = repository.registerNewShop(
+                    shopName = shopName,
+                    ownerName = ownerName,
+                    phone = normalizedPhone,
+                    address = address,
+                    district = district,
+                    businessType = businessType,
+                    pin = normalizedPin
+                )
+
+                if (repoResult.isFailure) {
+                    onResult(false, repoResult.exceptionOrNull()?.message ?: "নিবন্ধন ব্যর্থ হয়েছে!", null)
+                    return@launch
+                }
+
+                val (newAdmin, _) = repoResult.getOrThrow()
+
+                // Generate unique Business ID for platform
+                val shopId = "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}"
+
+                val platformBiz = PlatformBusiness(
+                    id = shopId,
+                    businessName = shopName.trim(),
+                    ownerUid = newAdmin.id,
+                    ownerName = ownerName.trim(),
+                    ownerEmail = "",
+                    ownerPhone = normalizedPhone,
+                    status = BusinessAccountStatus.ACTIVE,
+                    planId = "plan_free",
+                    planName = "সম্পূর্ণ ফ্রি ব্যবহার",
+                    subscriptionStatus = SubscriptionStatus.ACTIVE,
+                    subscriptionExpiresAt = 0L, // Disabled auto expiry
+                    isAutoExpiryDisabled = true,
+                    staffCount = 1,
+                    maxStaffAllowed = 2,
+                    businessType = businessType.ifBlank { "সাধারণ ব্যবসা" },
+                    address = address.trim(),
+                    district = district.trim(),
+                    createdAt = System.currentTimeMillis(),
+                    lastActiveAt = System.currentTimeMillis(),
+                    notes = "নতুন দোকানদার স্ব-নিবন্ধন (ডিফল্ট আজীবন ফ্রি)"
+                )
+
+                // Register into SuperAdminRepository
+                val superAdminRepo = SuperAdminRepository(getApplication())
+                superAdminRepo.registerNewShop(platformBiz)
+
+                // Store active business ID & role locally
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = shopId,
+                    businessName = shopName.trim(),
+                    role = UserRole.ADMIN.name
+                )
+                _activeBusinessId.value = shopId
+                _currentUser.value = newAdmin
+
+                onResult(true, "অভিনন্দন! আপনার দোকান সফলভাবে নিবন্ধিত হয়েছে।", shopId)
+            } catch (e: Exception) {
+                onResult(false, e.localizedMessage ?: "রেজিস্ট্রেশনে সমস্যা হয়েছে!", null)
+            }
+        }
+    }
+
     fun logout() {
         _currentUser.value = null
         CloudBusinessAuth.setStoredRole(getApplication(), null)

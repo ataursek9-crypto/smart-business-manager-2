@@ -55,7 +55,8 @@ enum class AppScreen {
     SALESMAN_ALERT,
     ADMIN_STOCK_CONTROL,
     SALESMAN_STOCK_VERIFICATION,
-    SUPER_ADMIN_DASHBOARD
+    SUPER_ADMIN_DASHBOARD,
+    SHOP_REGISTRATION
 }
 
 class MainActivity : ComponentActivity() {
@@ -115,7 +116,7 @@ fun SmartBusinessApp(
     // Synchronize authentication with screen and enforce role-based navigation security
     LaunchedEffect(currentUser, currentScreen) {
         if (currentUser == null) {
-            if (currentScreen != AppScreen.LOGIN && currentScreen != AppScreen.ADMIN_LOGIN) {
+            if (currentScreen != AppScreen.LOGIN && currentScreen != AppScreen.ADMIN_LOGIN && currentScreen != AppScreen.SHOP_REGISTRATION) {
                 currentScreen = AppScreen.LOGIN
             }
         } else {
@@ -198,6 +199,9 @@ fun SmartBusinessApp(
                         onNavigateToAdminLogin = {
                             currentScreen = AppScreen.ADMIN_LOGIN
                         },
+                        onNavigateToRegistration = {
+                            currentScreen = AppScreen.SHOP_REGISTRATION
+                        },
                         onLoginSuccess = {
                             currentScreen = if (viewModel.currentUser.value?.role == UserRole.ADMIN) {
                                 AppScreen.ADMIN_DASHBOARD
@@ -214,7 +218,23 @@ fun SmartBusinessApp(
                         onBack = {
                             currentScreen = AppScreen.LOGIN
                         },
+                        onNavigateToRegistration = {
+                            currentScreen = AppScreen.SHOP_REGISTRATION
+                        },
                         onAdminLoginSuccess = {
+                            currentScreen = AppScreen.ADMIN_DASHBOARD
+                        }
+                    )
+                }
+
+                AppScreen.SHOP_REGISTRATION -> {
+                    ShopRegistrationScreen(
+                        viewModel = viewModel,
+                        superAdminViewModel = superAdminViewModel,
+                        onBack = {
+                            currentScreen = AppScreen.LOGIN
+                        },
+                        onRegistrationSuccess = {
                             currentScreen = AppScreen.ADMIN_DASHBOARD
                         }
                     )

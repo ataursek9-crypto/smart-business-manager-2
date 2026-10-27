@@ -356,6 +356,85 @@ class BusinessRepository(
         return user
     }
 
+    /**
+     * Registers a new shop with the owner as Admin.
+     * Prevents duplicate registrations with the same mobile number.
+     * Securely hashes PIN using SHA-256.
+     * Updates CompanySettings with the new shop's name, phone, address.
+     */
+    suspend fun registerNewShop(
+        shopName: String,
+        ownerName: String,
+        phone: String,
+        address: String,
+        district: String,
+        businessType: String,
+        pin: String
+    ): Result<Pair<User, CompanySettings>> {
+        val cleanPhone = phone.trim()
+        val cleanShopName = shopName.trim()
+        val cleanOwnerName = ownerName.trim()
+
+        if (cleanShopName.length < 2) {
+            return Result.failure(IllegalArgumentException("দোকানের নাম কমপক্ষে ২ অক্ষরের হতে হবে!"))
+        }
+        if (cleanOwnerName.length < 2) {
+            return Result.failure(IllegalArgumentException("মালিকের নাম কমপক্ষে ২ অক্ষরের হতে হবে!"))
+        }
+        if (cleanPhone.length < 11) {
+            return Result.failure(IllegalArgumentException("সঠিক ১১ ডিজিটের মোবাইল নম্বর দিন (যেমন: 017XXXXXXXX)!"))
+        }
+        if (pin.length < 4 || pin.length > 6) {
+            return Result.failure(IllegalArgumentException("পিন কোড ৪ থেকে ৬ সংখ্যার হতে হবে!"))
+        }
+
+        // Check duplicate phone in local DB
+        val existing = db.userDao().getUserByPhone(cleanPhone)
+        if (existing != null) {
+            return Result.failure(IllegalStateException("এই মোবাইল নম্বর (${cleanPhone}) দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট নিবন্ধিত রয়েছে!"))
+        }
+
+        val hashedPin = hashPin(pin)
+        val adminId = "admin_${System.currentTimeMillis() % 10000000}_${(100..999).random()}"
+        val newAdmin = User(
+            id = adminId,
+            name = cleanOwnerName,
+            phone = cleanPhone,
+            role = UserRole.ADMIN,
+            pinHash = hashedPin,
+            isActive = true,
+            accountStatus = UserAccountStatus.ACTIVE
+        )
+
+        val fullAddress = if (district.isNotBlank()) {
+            if (address.isNotBlank()) "${address.trim()}, $district" else district.trim()
+        } else {
+            address.trim()
+        }
+
+        val newSettings = CompanySettings(
+            id = 1,
+            businessName = cleanShopName,
+            phone = cleanPhone,
+            address = fullAddress.ifBlank { "বাংলাদেশ" }
+        )
+
+        db.withTransaction {
+            db.userDao().insertUser(newAdmin)
+            db.companySettingsDao().insertOrUpdate(newSettings)
+            db.auditLogDao().insertAuditLog(
+                AuditLog(
+                    userId = adminId,
+                    userName = cleanOwnerName,
+                    action = "নতুন দোকান স্ব-নিবন্ধন",
+                    details = "দোকানের নাম: '$cleanShopName', মালিক: '$cleanOwnerName', মোবাইল: $cleanPhone, ধরন: $businessType, ঠিকানা: $fullAddress (সম্পূর্ণ ফ্রি ব্যবহার)"
+                )
+            )
+        }
+
+        return Result.success(Pair(newAdmin, newSettings))
+    }
+
     // Verify current user validity in background
     suspend fun isUserActiveAndAllowed(userId: String): Boolean {
         val user = db.userDao().getUserById(userId) ?: return false

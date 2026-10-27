@@ -35,6 +35,7 @@ import com.example.viewmodel.BusinessViewModel
 fun AdminLoginScreen(
     viewModel: BusinessViewModel,
     onBack: () -> Unit,
+    onNavigateToRegistration: () -> Unit = {},
     onAdminLoginSuccess: () -> Unit
 ) {
     BackHandler { onBack() }
@@ -244,7 +245,34 @@ fun AdminLoginScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // New Shop Registration Button
+                    OutlinedButton(
+                        onClick = onNavigateToRegistration,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("admin_navigate_to_shop_registration_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryNavy)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Storefront,
+                            contentDescription = null,
+                            tint = PrimaryNavy,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "নতুন দোকান রেজিস্ট্রেশন — বিনামূল্যে",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = PrimaryNavy
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     // OR Divider
                     Row(
