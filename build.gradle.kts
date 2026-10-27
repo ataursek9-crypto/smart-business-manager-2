@@ -9,7 +9,7 @@ plugins {
 
 tasks.register("exportProjectZip") {
     group = "distribution"
-    description = "Builds latest debug APK, copies to release-files/SmartBusinessManager.apk, and creates SmartBusinessManager_Export.zip"
+    description = "Builds latest debug APK and creates SmartBusinessManager_Project.zip with APK/SmartBusinessManager.apk, README_BN.txt, and SmartBusinessManager_Project/ source"
     dependsOn(":app:assembleDebug")
     notCompatibleWithConfigurationCache("Requires project root directory walk and zip packaging")
 
@@ -23,6 +23,16 @@ tasks.register("exportProjectZip") {
             throw GradleException("Build Error: Generated APK is suspiciously small (${apkSize} bytes). Build may be corrupted.")
         }
 
+        val apkDir = file("APK")
+        if (!apkDir.exists()) {
+            apkDir.mkdirs()
+        }
+        val targetApkInApkDir = file("APK/SmartBusinessManager.apk")
+        apkFile.copyTo(targetApkInApkDir, overwrite = true)
+
+        val rootApk = file("SmartBusinessManager.apk")
+        apkFile.copyTo(rootApk, overwrite = true)
+
         val releaseDir = file("release-files")
         if (!releaseDir.exists()) {
             releaseDir.mkdirs()
@@ -32,22 +42,32 @@ tasks.register("exportProjectZip") {
         val apkSizeMb = targetApk.length() / (1024 * 1024)
         println("Successfully generated APK: ${targetApk.absolutePath} ($apkSizeMb MB)")
 
-        val zipFile = file("SmartBusinessManager_Export.zip")
+        val zipFile = file("SmartBusinessManager_Project.zip")
         if (zipFile.exists()) {
             zipFile.delete()
         }
 
+        val readmeFile = file("README_BN.txt")
+
         val zipOut = java.util.zip.ZipOutputStream(java.io.FileOutputStream(zipFile))
         try {
-            // 1. Add release-files/SmartBusinessManager.apk
-            val apkEntry = java.util.zip.ZipEntry("release-files/SmartBusinessManager.apk")
+            // 1. Add APK/SmartBusinessManager.apk
+            val apkEntry = java.util.zip.ZipEntry("APK/SmartBusinessManager.apk")
             zipOut.putNextEntry(apkEntry)
-            targetApk.inputStream().use { it.copyTo(zipOut) }
+            targetApkInApkDir.inputStream().use { it.copyTo(zipOut) }
             zipOut.closeEntry()
 
-            // 2. Add SmartBusinessManager/ source tree (excluding build, .gradle, and zip files)
-            val ignoredDirs = setOf("build", ".gradle", ".git", "release-files")
-            val ignoredFiles = setOf("SmartBusinessManager_Export.zip", "backup_before_sync_fix.zip")
+            // 2. Add README_BN.txt at root of ZIP
+            if (readmeFile.exists()) {
+                val readmeEntry = java.util.zip.ZipEntry("README_BN.txt")
+                zipOut.putNextEntry(readmeEntry)
+                readmeFile.inputStream().use { it.copyTo(zipOut) }
+                zipOut.closeEntry()
+            }
+
+            // 3. Add SmartBusinessManager_Project/ source tree
+            val ignoredDirs = setOf("build", ".gradle", ".git", "release-files", "APK")
+            val ignoredFiles = setOf("SmartBusinessManager_Project.zip", "SmartBusinessManager_Export.zip", "SmartBusinessManager.apk", "backup_before_sync_fix.zip")
 
             rootDir.walkTopDown()
                 .filter { f ->
@@ -58,7 +78,7 @@ tasks.register("exportProjectZip") {
                 .forEach { f ->
                     val relPath = f.relativeTo(rootDir).path
                     if (relPath.isNotEmpty() && relPath != ".") {
-                        val entryPath = "SmartBusinessManager/" + relPath.replace('\\', '/')
+                        val entryPath = "SmartBusinessManager_Project/" + relPath.replace('\\', '/')
                         if (f.isDirectory) {
                             val dirEntry = java.util.zip.ZipEntry(if (entryPath.endsWith("/")) entryPath else "$entryPath/")
                             zipOut.putNextEntry(dirEntry)
@@ -75,15 +95,26 @@ tasks.register("exportProjectZip") {
             zipOut.close()
         }
 
+        // Also copy as alias SmartBusinessManager_Export.zip for backward compatibility
+        val legacyZip = file("SmartBusinessManager_Export.zip")
+        zipFile.copyTo(legacyZip, overwrite = true)
+
         // Verify the ZIP
         val zipVerify = java.util.zip.ZipFile(zipFile)
-        val hasApk = zipVerify.getEntry("release-files/SmartBusinessManager.apk") != null
+        val apkInside = zipVerify.getEntry("APK/SmartBusinessManager.apk")
+        val readmeInside = zipVerify.getEntry("README_BN.txt")
         val count = zipVerify.size()
         val zipSizeMb = zipFile.length() / (1024 * 1024)
+
+        if (apkInside == null) {
+            zipVerify.close()
+            throw GradleException("Verification Error: APK/SmartBusinessManager.apk was not found inside SmartBusinessManager_Project.zip")
+        }
+        val insideApkSize = apkInside.size
         zipVerify.close()
 
-        if (!hasApk) {
-            throw GradleException("Verification Error: release-files/SmartBusinessManager.apk was not found inside SmartBusinessManager_Export.zip")
+        if (insideApkSize < 1000000L) {
+            throw GradleException("Verification Error: APK inside ZIP is too small ($insideApkSize bytes)")
         }
 
         println("==================================================")
@@ -91,7 +122,9 @@ tasks.register("exportProjectZip") {
         println("ZIP Path: ${zipFile.absolutePath}")
         println("ZIP Size: $zipSizeMb MB")
         println("Files in ZIP: $count")
-        println("Verified: release-files/SmartBusinessManager.apk is present inside the ZIP!")
+        println("Verified: APK/SmartBusinessManager.apk ($insideApkSize bytes) is present inside the ZIP!")
+        println("Verified: README_BN.txt is present inside the ZIP!")
+        println("Verified: Direct APK exported at ${rootApk.absolutePath}")
         println("==================================================")
     }
 }

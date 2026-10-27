@@ -428,7 +428,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         } else {
             allUsers.filter { it.shopId == "biz_smart_store_1" || it.shopId.isBlank() }
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val allSubmissions: StateFlow<List<ProductSubmission>> = repository.allProductSubmissions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -662,6 +662,31 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             checkDefaultAdminPinStatus()
             reminderManager.schedulePeriodicCheck()
             alertRepository.checkAndDispatchScheduledAlerts()
+
+            // Auto-restore Super Admin session if previously authenticated
+            try {
+                val authUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                val storedEmail = authUser?.email?.trim()?.lowercase() ?: CloudBusinessAuth.getStoredAuthEmail(application)
+                if (!storedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(storedEmail)) {
+                    _currentGoogleEmail.value = storedEmail
+                    val uid = authUser?.uid ?: "superadmin_${storedEmail.replace('@', '_').replace('.', '_')}"
+                    val existing = repository.getUserById(uid)
+                    val superAdminUser = existing ?: User(
+                        id = uid,
+                        name = authUser?.displayName ?: "প্ল্যাটফর্ম সুপার এডমিন",
+                        phone = authUser?.phoneNumber ?: "01700000000",
+                        role = UserRole.ADMIN,
+                        pinHash = repository.hashPin("1234"),
+                        isActive = true,
+                        accountStatus = UserAccountStatus.ACTIVE
+                    )
+                    repository.saveUserDirect(superAdminUser)
+                    _activeBusinessId.value = uid
+                    _currentUser.value = superAdminUser
+                }
+            } catch (e: Exception) {
+                Log.w("BusinessViewModel", "Session auto-restore note: ${e.message}")
+            }
         }
         viewModelScope.launch {
             products.collectLatest { prodList ->
@@ -1199,6 +1224,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 _activeBusinessId.value = uid
                 _currentUser.value = superAdminUser
+                onResult(true, "প্ল্যাটফর্ম সুপার এডমিন কনসোলে স্বাগতম, ${superAdminUser.name}!", UserRole.ADMIN)
+
+                // Background cloud sync non-blocking
                 try {
                     if (syncManager.isCloudBackendConfigured()) {
                         syncManager.ensureBusinessDocExists(uid, uid)
@@ -1209,7 +1237,6 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
                 syncManager.startProductsRealtimeListener()
                 triggerSync()
-                onResult(true, "প্ল্যাটফর্ম সুপার এডমিন কনসোলে স্বাগতম, ${superAdminUser.name}!", UserRole.ADMIN)
                 return@launch
             }
 
@@ -1979,7 +2006,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val shopId = getActiveBusinessId().ifBlank { current.shopId }
                 val existingInShop = repository.getUserByShopAndPhone(shopId, cleanPhone)
                 if (existingInShop != null) {
-                    onResult(false, "এই দোকানে এই মোবাইল নম্বর ($cleanPhone) দিয়ে ইতিমধ্যে একজন স্টাফ নিবন্ধিত রয়েছেন!")
+                    onResult(false, "এই দোকানে এই মোবাইল নম্বর ($cleanPhone) দিয়ে ইতিমধ্যে একজন স্টাফ বিদ্যমান রয়েছেন!")
                     return@launch
                 }
 

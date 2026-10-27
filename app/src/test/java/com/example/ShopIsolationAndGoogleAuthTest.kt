@@ -41,8 +41,11 @@ class ShopIsolationAndGoogleAuthTest {
         Dispatchers.setMain(testDispatcher)
         app = ApplicationProvider.getApplicationContext()
         com.example.data.sync.CloudBusinessAuth.clear(app)
+        val directExecutor = java.util.concurrent.Executor { it.run() }
         db = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java)
             .allowMainThreadQueries()
+            .setQueryExecutor(directExecutor)
+            .setTransactionExecutor(directExecutor)
             .build()
         AppDatabase.setInstanceForTesting(db)
         SuperAdminRepository.getInstance(app).resetStateForTesting()
