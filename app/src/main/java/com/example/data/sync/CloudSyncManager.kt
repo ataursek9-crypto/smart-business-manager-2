@@ -1933,6 +1933,41 @@ object CloudBusinessAuth {
         editor.apply()
     }
 
+    fun setLinkedGoogleAccount(context: Context, uid: String, email: String?, userId: String, shopId: String) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        val cleanUid = uid.trim()
+        val cleanEmail = email?.trim()?.lowercase() ?: ""
+        if (cleanUid.isNotBlank()) {
+            editor.putString("linked_uid_user_$cleanUid", userId)
+            editor.putString("linked_uid_shop_$cleanUid", shopId)
+        }
+        if (cleanEmail.isNotBlank()) {
+            editor.putString("linked_email_user_$cleanEmail", userId)
+            editor.putString("linked_email_shop_$cleanEmail", shopId)
+        }
+        editor.apply()
+    }
+
+    fun getLinkedUserId(context: Context, uid: String, email: String?): String? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val cleanUid = uid.trim()
+        val cleanEmail = email?.trim()?.lowercase() ?: ""
+        val byUid = if (cleanUid.isNotBlank()) prefs.getString("linked_uid_user_$cleanUid", null) else null
+        if (!byUid.isNullOrBlank()) return byUid
+        val byEmail = if (cleanEmail.isNotBlank()) prefs.getString("linked_email_user_$cleanEmail", null) else null
+        return byEmail?.ifBlank { null }
+    }
+
+    fun getLinkedShopId(context: Context, uid: String, email: String?): String? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val cleanUid = uid.trim()
+        val cleanEmail = email?.trim()?.lowercase() ?: ""
+        val byUid = if (cleanUid.isNotBlank()) prefs.getString("linked_uid_shop_$cleanUid", null) else null
+        if (!byUid.isNullOrBlank()) return byUid
+        val byEmail = if (cleanEmail.isNotBlank()) prefs.getString("linked_email_shop_$cleanEmail", null) else null
+        return byEmail?.ifBlank { null }
+    }
+
     fun clear(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }

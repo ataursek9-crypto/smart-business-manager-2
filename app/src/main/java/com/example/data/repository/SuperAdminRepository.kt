@@ -969,6 +969,21 @@ class SuperAdminRepository(
         return Result.success(business)
     }
 
+    fun updateOwnerEmailForShop(shopId: String, email: String, uid: String? = null) {
+        val currentList = _businesses.value.toMutableList()
+        val index = currentList.indexOfFirst { it.id == shopId }
+        if (index >= 0) {
+            val old = currentList[index]
+            val updated = old.copy(
+                ownerEmail = email.trim().lowercase(),
+                ownerUid = if (!uid.isNullOrBlank()) uid else old.ownerUid
+            )
+            currentList[index] = updated
+            _businesses.value = currentList
+            saveBusinessesLocally(currentList)
+        }
+    }
+
     /**
      * Sends or updates a subscription proposal / notice to a shop.
      * Strictly acts as an informative notice or proposal without cutting or interrupting free access.

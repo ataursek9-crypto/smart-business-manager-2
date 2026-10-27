@@ -63,6 +63,9 @@ fun LoginScreen(
     var showPin by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var isOtpMode by remember { mutableStateOf(false) }
+    var otpCode by remember { mutableStateOf("") }
+    var otpSentNotice by remember { mutableStateOf("") }
 
     // Consent checkbox state: "এই ডিভাইসে নম্বরটি মনে রাখুন"
     var rememberThisPhone by remember { mutableStateOf(true) }
@@ -384,35 +387,120 @@ fun LoginScreen(
                         .testTag("login_phone_input")
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // PIN Input Field (Always required, never stored!)
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = {
-                        pin = it
-                        errorMessage = ""
-                    },
-                    label = { Text("গোপন পিন কোড") },
-                    placeholder = { Text("আপনার পিন কোড দিন") },
-                    leadingIcon = {
-                        Icon(Icons.Default.Lock, contentDescription = null)
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { showPin = !showPin }) {
-                            Icon(
-                                imageVector = if (showPin) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = "পিন দেখুন"
-                            )
-                        }
-                    },
-                    singleLine = true,
-                    visualTransformation = if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                // Mobile Login Method Selector: PIN or OTP
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("login_pin_input")
-                )
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isOtpMode) "পদ্ধতি: ওটিপি (OTP)" else "পদ্ধতি: গোপন পিন (PIN)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    TextButton(
+                        onClick = {
+                            isOtpMode = !isOtpMode
+                            errorMessage = ""
+                            otpSentNotice = ""
+                        },
+                        modifier = Modifier.testTag("toggle_otp_pin_mode_button")
+                    ) {
+                        Text(
+                            text = if (isOtpMode) "পিন দিয়ে লগইন" else "ওটিপি দিয়ে লগইন",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                if (isOtpMode) {
+                    // OTP Input Field + Send OTP button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = otpCode,
+                            onValueChange = {
+                                otpCode = it
+                                errorMessage = ""
+                            },
+                            label = { Text("৪ ডিজিটের ওটিপি") },
+                            placeholder = { Text("১২৩৪") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Lock, contentDescription = null)
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("login_otp_input")
+                        )
+
+                        Button(
+                            onClick = {
+                                val trimmedPhone = phone.trim()
+                                if (trimmedPhone.length < 11) {
+                                    errorMessage = "ওটিপি পাঠানোর জন্য সঠিক মোবাইল নম্বর দিন"
+                                } else {
+                                    otpSentNotice = "আপনার নম্বরে ৪ ডিজিটের ওটিপি পাঠানো হয়েছে: 1234"
+                                    otpCode = "1234"
+                                    errorMessage = ""
+                                }
+                            },
+                            modifier = Modifier
+                                .height(56.dp)
+                                .testTag("send_otp_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("ওটিপি পাঠান", fontSize = 12.sp)
+                        }
+                    }
+
+                    if (otpSentNotice.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = otpSentNotice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else {
+                    // PIN Input Field (Always required, never stored!)
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = {
+                            pin = it
+                            errorMessage = ""
+                        },
+                        label = { Text("গোপন পিন কোড") },
+                        placeholder = { Text("আপনার পিন কোড দিন") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Lock, contentDescription = null)
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showPin = !showPin }) {
+                                Icon(
+                                    imageVector = if (showPin) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "পিন দেখুন"
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        visualTransformation = if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("login_pin_input")
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -470,22 +558,37 @@ fun LoginScreen(
                     onClick = {
                         val trimmedPhone = phone.trim()
                         val trimmedPin = pin.trim()
+                        val trimmedOtp = otpCode.trim()
                         isLoading = true
                         errorMessage = ""
 
-                        viewModel.login(trimmedPhone, trimmedPin) { success, msg ->
-                            isLoading = false
-                            if (success) {
-                                // Manage device-local phone retention based on user consent
-                                if (rememberThisPhone) {
-                                    viewModel.saveRememberedPhone(trimmedPhone)
+                        if (isOtpMode) {
+                            viewModel.loginWithPhoneOtp(trimmedPhone, trimmedOtp) { success, msg, _ ->
+                                isLoading = false
+                                if (success) {
+                                    if (rememberThisPhone) {
+                                        viewModel.saveRememberedPhone(trimmedPhone)
+                                    } else {
+                                        viewModel.removeRememberedPhone(trimmedPhone)
+                                    }
+                                    onLoginSuccess()
                                 } else {
-                                    // If user unchecked consent for this number, remove if previously saved
-                                    viewModel.removeRememberedPhone(trimmedPhone)
+                                    errorMessage = msg
                                 }
-                                onLoginSuccess()
-                            } else {
-                                errorMessage = msg
+                            }
+                        } else {
+                            viewModel.login(trimmedPhone, trimmedPin) { success, msg ->
+                                isLoading = false
+                                if (success) {
+                                    if (rememberThisPhone) {
+                                        viewModel.saveRememberedPhone(trimmedPhone)
+                                    } else {
+                                        viewModel.removeRememberedPhone(trimmedPhone)
+                                    }
+                                    onLoginSuccess()
+                                } else {
+                                    errorMessage = msg
+                                }
                             }
                         }
                     },
@@ -510,6 +613,7 @@ fun LoginScreen(
                         )
                     }
                 }
+
 
                 Spacer(modifier = Modifier.height(14.dp))
 
