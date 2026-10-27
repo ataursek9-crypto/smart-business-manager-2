@@ -752,30 +752,9 @@ fun LoginScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "নিরাপত্তার স্বার্থে অ্যাডমিনের ক্লাউড বিজনেস কোড, নিবন্ধিত মোবাইল নম্বর ও পিন কোড দিয়ে অ্যাকাউন্টটি অনুমোদন করুন:",
+                        text = "নিরাপত্তার স্বার্থে আপনার নিবন্ধিত মোবাইল নম্বর ও গোপন পিন কোড দিয়ে অ্যাকাউন্টটির মালিকানা নিশ্চিত করুন:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    OutlinedTextField(
-                        value = linkBusinessIdInput,
-                        onValueChange = { linkBusinessIdInput = it; linkErrorMessage = "" },
-                        label = { Text("ক্লাউড বিজনেস কোড *") },
-                        placeholder = { Text("অ্যাডমিনের বিজনেস কোড পেস্ট করুন") },
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = {
-                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
-                                if (!clip.isNullOrBlank()) {
-                                    linkBusinessIdInput = clip.trim()
-                                    linkErrorMessage = ""
-                                }
-                            }) {
-                                Icon(Icons.Default.ContentPaste, contentDescription = "পেস্ট করুন")
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("link_business_id_input")
                     )
 
                     OutlinedTextField(
@@ -796,6 +775,27 @@ fun LoginScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("link_pin_input")
+                    )
+
+                    OutlinedTextField(
+                        value = linkBusinessIdInput,
+                        onValueChange = { linkBusinessIdInput = it; linkErrorMessage = "" },
+                        label = { Text("ক্লাউড বিজনেস কোড (ঐচ্ছিক)") },
+                        placeholder = { Text("সেলসম্যান হলে অ্যাডমিনের বিজনেস কোড দিন") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    linkBusinessIdInput = clip.trim()
+                                    linkErrorMessage = ""
+                                }
+                            }) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "পেস্ট করুন")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("link_business_id_input")
                     )
 
                     if (linkErrorMessage.isNotBlank()) {
@@ -837,34 +837,18 @@ fun LoginScreen(
                         isLinkingLoading = true
                         linkErrorMessage = ""
                         val cleanBiz = linkBusinessIdInput.trim()
-                        if (cleanBiz.isNotBlank()) {
-                            viewModel.linkGoogleAccountWithBusiness(
-                                firebaseUser = fUser,
-                                businessId = cleanBiz,
-                                phone = linkPhoneInput.trim(),
-                                pin = linkPinInput.trim()
-                            ) { success, msg, role ->
-                                isLinkingLoading = false
-                                if (success) {
-                                    pendingGoogleUser = null
-                                    onLoginSuccess()
-                                } else {
-                                    linkErrorMessage = msg
-                                }
-                            }
-                        } else {
-                            viewModel.linkGoogleAccountWithPin(
-                                firebaseUser = fUser,
-                                phone = linkPhoneInput.trim(),
-                                pin = linkPinInput.trim()
-                            ) { success, msg, role ->
-                                isLinkingLoading = false
-                                if (success) {
-                                    pendingGoogleUser = null
-                                    onLoginSuccess()
-                                } else {
-                                    linkErrorMessage = msg
-                                }
+                        viewModel.linkGoogleAccountWithPin(
+                            firebaseUser = fUser,
+                            phone = linkPhoneInput.trim(),
+                            pin = linkPinInput.trim(),
+                            businessId = cleanBiz.ifBlank { null }
+                        ) { success, msg, role ->
+                            isLinkingLoading = false
+                            if (success) {
+                                pendingGoogleUser = null
+                                onLoginSuccess()
+                            } else {
+                                linkErrorMessage = msg
                             }
                         }
                     },

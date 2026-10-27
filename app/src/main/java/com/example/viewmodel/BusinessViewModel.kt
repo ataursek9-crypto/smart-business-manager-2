@@ -959,7 +959,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             }
             when (val auth = repository.authenticateUser(phone, pin)) {
                 is BusinessRepository.AuthResult.Success -> {
-                    if (auth.user.role == UserRole.ADMIN) {
+                    if (auth.user.role == UserRole.ADMIN && (auth.user.phone == "01700000000" || auth.user.id == "admin_1" || auth.user.shopId == "biz_smart_store_1")) {
                         _currentUser.value = null
                         onResult(false, "অননুমোদিত অ্যাকাউন্ট! এটি সাধারণ বিক্রয় কর্মীদের লগইন স্ক্রিন।")
                     } else {
@@ -970,7 +970,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         _currentGoogleEmail.value = null
                         CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
                         CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
-                        CloudBusinessAuth.setStoredRole(getApplication(), UserRole.SALESMAN.name)
+                        CloudBusinessAuth.setStoredRole(getApplication(), auth.user.role.name)
                         val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
                         val bizId = when {
                             auth.user.shopId.isNotBlank() -> auth.user.shopId
@@ -980,12 +980,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         CloudBusinessAuth.setStoredBusinessId(
                             context = getApplication(),
                             businessId = bizId,
-                            role = UserRole.SALESMAN.name
+                            role = auth.user.role.name
                         )
                         _activeBusinessId.value = bizId
                         val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
                         if (fUid != null && bizId.isNotBlank()) {
-                            syncManager.ensureStaffLinked(bizId, fUid, auth.user.phone, auth.user.name, UserRole.SALESMAN.name)
+                            syncManager.ensureStaffLinked(bizId, fUid, auth.user.phone, auth.user.name, auth.user.role.name)
                         }
                         syncManager.startProductsRealtimeListener()
                         triggerSync()
@@ -1584,7 +1584,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             _currentUser.value = null
             onResult(
                 false,
-                "এই গুগল অ্যাকাউন্টটি (${if (cleanEmail.isNotBlank()) cleanEmail else name}) কোনো নিবন্ধিত দোকানের সাথে যুক্ত নয়। অনুগ্রহ করে নতুন দোকান রেজিস্ট্রেশন করুন অথবা আপনার বিদ্যমান দোকানে এই জিমেইলটি সংযুক্ত করুন।",
+                "এই গুগল অ্যাকাউন্টটি (${if (cleanEmail.isNotBlank()) cleanEmail else name}) অনুমোদিত নয় এবং কোনো নিবন্ধিত দোকানের সাথে যুক্ত নয়। অনুগ্রহ করে নতুন দোকান রেজিস্ট্রেশন করুন অথবা আপনার বিদ্যমান দোকানে এই জিমেইলটি সংযুক্ত করুন।",
                 null
             )
         }
@@ -1825,13 +1825,14 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         firebaseUser: com.google.firebase.auth.FirebaseUser,
         phone: String,
         pin: String,
+        businessId: String? = null,
         onResult: (Boolean, String, UserRole?) -> Unit
     ) {
-        val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
-        if (!existingBizId.isNullOrBlank()) {
+        val cleanBiz = businessId?.trim() ?: ""
+        if (cleanBiz.isNotBlank()) {
             linkGoogleAccountWithBusiness(
                 firebaseUser = firebaseUser,
-                businessId = existingBizId,
+                businessId = cleanBiz,
                 phone = phone,
                 pin = pin,
                 onResult = onResult
@@ -1840,6 +1841,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             linkGoogleCredentialsWithPin(
                 uid = firebaseUser.uid,
                 displayName = firebaseUser.displayName,
+                email = firebaseUser.email,
                 phone = phone,
                 pin = pin,
                 onResult = onResult
@@ -1850,60 +1852,92 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     fun linkGoogleCredentialsWithPin(
         uid: String,
         displayName: String?,
+        email: String? = null,
         phone: String,
         pin: String,
         onResult: (Boolean, String, UserRole?) -> Unit
     ) {
         viewModelScope.launch {
-            if (phone.isBlank() || pin.isBlank()) {
+            val cleanPhone = CloudBusinessAuth.normalizePhone(phone)
+            val cleanPin = pin.trim()
+            val cleanEmail = email?.trim()?.lowercase() ?: ""
+            if (cleanPhone.isBlank() || cleanPin.isBlank()) {
                 onResult(false, "ফোন নম্বর এবং পিন কোড সঠিকভাবে লিখুন!", null)
                 return@launch
             }
-            when (val auth = repository.authenticateUser(phone, pin)) {
-                is BusinessRepository.AuthResult.Success -> {
-                    val localUser = auth.user
-                    val linkedUser = localUser.copy(
-                        id = uid,
-                        name = if (displayName.isNullOrBlank()) localUser.name else displayName
-                    )
-                    repository.saveUserDirect(linkedUser)
-                    _currentUser.value = linkedUser
-                    val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
-                    if (!existingBizId.isNullOrBlank()) {
-                        CloudBusinessAuth.setStoredBusinessId(
-                            context = getApplication(),
-                            businessId = existingBizId,
-                            role = linkedUser.role.name
-                        )
-                        _activeBusinessId.value = existingBizId
-                        triggerSync()
-                    }
-                    onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে লিংক করা হয়েছে! স্বাগতম, ${linkedUser.name}!", linkedUser.role)
+
+            // Cryptographic verification of ownership
+            val auth = repository.authenticateUser(cleanPhone, cleanPin)
+            val targetUser = if (auth is BusinessRepository.AuthResult.Success) {
+                auth.user
+            } else {
+                val adminAuth = repository.authenticateAdmin(cleanPhone, cleanPin)
+                if (adminAuth is BusinessRepository.AuthResult.Success) adminAuth.user else null
+            }
+
+            if (targetUser == null) {
+                onResult(false, "ভুল ফোন নম্বর অথবা পিন কোড! অ্যাকাউন্ট মালিকানা যাচাই ব্যর্থ হয়েছে।", null)
+                return@launch
+            }
+
+            val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
+            val targetShopId = when {
+                targetUser.shopId.isNotBlank() -> targetUser.shopId
+                !existingBizId.isNullOrBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1" -> existingBizId
+                else -> "biz_smart_store_1"
+            }
+
+            val linkedUser = targetUser.copy(
+                id = uid,
+                name = if (displayName.isNullOrBlank() || displayName == "গুগল ব্যবহারকারী") targetUser.name else displayName
+            )
+            repository.saveUserDirect(linkedUser)
+            _currentUser.value = linkedUser
+
+            // Link in CloudBusinessAuth
+            CloudBusinessAuth.setLinkedGoogleAccount(
+                context = getApplication(),
+                uid = uid,
+                email = cleanEmail,
+                userId = uid,
+                shopId = targetShopId
+            )
+            CloudBusinessAuth.setStoredBusinessId(
+                context = getApplication(),
+                businessId = targetShopId,
+                role = targetUser.role.name
+            )
+
+            // Update SuperAdminRepository if shop owner
+            if (targetUser.role == UserRole.ADMIN) {
+                val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
+                val matchedBiz = superAdminRepo.businesses.value.firstOrNull {
+                    it.id == targetShopId || it.ownerPhone == cleanPhone
                 }
-                is BusinessRepository.AuthResult.Error -> {
-                    when (val adminAuth = repository.authenticateAdmin(phone, pin)) {
-                        is BusinessRepository.AuthResult.Success -> {
-                            val adminUser = adminAuth.user
-                            val linkedAdmin = adminUser.copy(
-                                id = uid,
-                                name = if (displayName.isNullOrBlank()) adminUser.name else displayName
-                            )
-                            repository.saveUserDirect(linkedAdmin)
-                            _currentUser.value = linkedAdmin
-                            CloudBusinessAuth.setStoredBusinessId(
-                                context = getApplication(),
-                                businessId = uid,
-                                role = UserRole.ADMIN.name
-                            )
-                            _activeBusinessId.value = uid
-                            onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে এডমিন হিসেবে লিংক করা হয়েছে!", UserRole.ADMIN)
-                        }
-                        is BusinessRepository.AuthResult.Error -> {
-                            onResult(false, "ভুল ফোন নম্বর অথবা পিন কোড! লিংক করা সম্ভব হয়নি।", null)
-                        }
-                    }
+                if (matchedBiz != null) {
+                    superAdminRepo.registerNewShop(
+                        matchedBiz.copy(
+                            ownerUid = uid,
+                            ownerEmail = if (cleanEmail.isNotBlank()) cleanEmail else matchedBiz.ownerEmail
+                        )
+                    )
                 }
             }
+
+            _activeBusinessId.value = targetShopId
+
+            try {
+                if (syncManager.isCloudBackendConfigured()) {
+                    syncManager.ensureBusinessDocExists(targetShopId, targetUser.id)
+                    syncManager.ensureStaffLinked(targetShopId, uid, targetUser.phone, targetUser.name, targetUser.role.name)
+                }
+            } catch (e: Exception) {
+                Log.w("LinkAccount", "Cloud link note: ${e.message}")
+            }
+            syncManager.startProductsRealtimeListener()
+            triggerSync()
+
+            onResult(true, "গুগল অ্যাকাউন্ট সফলভাবে লিংক করা হয়েছে! স্বাগতম, ${linkedUser.name}!", targetUser.role)
         }
     }
 

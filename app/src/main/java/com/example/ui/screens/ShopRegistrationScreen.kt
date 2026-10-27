@@ -63,6 +63,16 @@ fun ShopRegistrationScreen(
     var errorMessage by remember { mutableStateOf("") }
     var successRegisteredShopId by remember { mutableStateOf<String?>(null) }
 
+    val currentGoogleUser = remember {
+        try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+    }
+
+    LaunchedEffect(currentGoogleUser) {
+        if (ownerName.isBlank() && !currentGoogleUser?.displayName.isNullOrBlank()) {
+            ownerName = currentGoogleUser!!.displayName!!
+        }
+    }
+
     val businessTypes = listOf(
         "মুদি ও জেনারেল স্টোর",
         "ফার্মেসি ও ঔষধ",
@@ -163,6 +173,43 @@ fun ShopRegistrationScreen(
                             color = Color(0xFF2E7D32),
                             lineHeight = 16.sp
                         )
+                    }
+                }
+            }
+
+            if (currentGoogleUser != null && !currentGoogleUser.email.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 540.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "সংযুক্ত Google অ্যাকাউন্ট: ${currentGoogleUser.email}",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "দোকান রেজিস্ট্রেশন সম্পন্ন হলে এই Google অ্যাকাউন্ট দিয়েই সরাসরি লগইন করতে পারবেন।",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                            )
+                        }
                     }
                 }
             }
@@ -572,6 +619,8 @@ fun ShopRegistrationScreen(
                                 businessType = selectedBusinessType,
                                 pin = cleanPin,
                                 isPhoneVerified = isPhoneVerified,
+                                ownerEmail = currentGoogleUser?.email ?: "",
+                                ownerUid = currentGoogleUser?.uid ?: "",
                                 superAdminViewModel = superAdminViewModel
                             ) { success, msg, newShopId ->
                                 isLoading = false
