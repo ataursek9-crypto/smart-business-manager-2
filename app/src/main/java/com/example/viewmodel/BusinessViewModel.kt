@@ -1078,13 +1078,18 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 _activeBusinessId.value = shopId
                 _currentUser.value = newAdmin
 
-                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
-                    syncManager.ensureBusinessDocExists(shopId, newAdmin.id)
-                    syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
+                try {
+                    if (syncManager.isCloudBackendConfigured()) {
+                        syncManager.ensureBusinessDocExists(shopId, newAdmin.id)
+                        syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
+                    }
+                } catch (e: Exception) {
+                    Log.w("RegisterShop", "Cloud linking skipped: ${e.message}")
                 }
 
                 onResult(true, "অভিনন্দন! আপনার দোকান সফলভাবে নিবন্ধিত হয়েছে।", shopId)
             } catch (e: Exception) {
+                e.printStackTrace()
                 onResult(false, e.localizedMessage ?: "রেজিস্ট্রেশনে সমস্যা হয়েছে!", null)
             }
         }
@@ -1093,34 +1098,35 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     fun logout() {
         _currentUser.value = null
         CloudBusinessAuth.setStoredRole(getApplication(), null)
+        CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
         try {
             com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
         } catch (_: Exception) {}
         savedAccountManager.handleLogout()
     }
 
-    /**
-     * Authenticate or map an authenticated Firebase User into the local business role.
-     * Enforces:
-     * 1. Does not automatically grant admin access to every Google account.
-     * 2. Verifies user belongs to an authorized business and has an assigned role.
-     * 3. Rejects unknown/unauthorized Google accounts.
-     */
+    private val _currentGoogleEmail = MutableStateFlow<String?>(
+        CloudBusinessAuth.getStoredAuthEmail(application)
+    )
+    val currentGoogleEmail: StateFlow<String?> = _currentGoogleEmail.asStateFlow()
+
     fun isSuperAdminUser(): Boolean {
         val user = _currentUser.value
         if (user?.role == UserRole.SUPER_ADMIN) return true
-        if (user?.role != UserRole.ADMIN) return false
-        val fbEmail = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email } catch (_: Exception) { null }
-        return repository.isAuthorizedSuperAdminEmail(fbEmail ?: "")
+        val candidateEmail = _currentGoogleEmail.value?.takeIf { it.isNotBlank() }
+            ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
+            ?: CloudBusinessAuth.getStoredAuthEmail(getApplication())
+        if (!candidateEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(candidateEmail)) {
+            return true
+        }
+        return false
     }
 
     fun getSuperAdminEmail(): String {
-        return try {
-            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() }
-                ?: "ataurgonee4@gmail.com"
-        } catch (_: Exception) {
-            "ataurgonee4@gmail.com"
-        }
+        return _currentGoogleEmail.value?.takeIf { it.isNotBlank() }
+            ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.email?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
+            ?: CloudBusinessAuth.getStoredAuthEmail(getApplication())
+            ?: "ataurgonee4@gmail.com"
     }
 
     /**
@@ -1155,10 +1161,59 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     ) {
         viewModelScope.launch {
             val phone = phoneNumber ?: ""
-            val cleanEmail = email ?: ""
+            val cleanEmail = email?.trim()?.lowercase() ?: ""
             val name = displayName ?: "গুগল ব্যবহারকারী"
 
-            // 1. Check if user already exists in Room by Firebase UID
+            if (cleanEmail.isNotBlank()) {
+                _currentGoogleEmail.value = cleanEmail
+                CloudBusinessAuth.setStoredAuthEmail(getApplication(), cleanEmail)
+            }
+
+            // Step 1: Check if this Google account is an AUTHORIZED PLATFORM SUPER ADMIN
+            val isSuperAdmin = cleanEmail.isNotBlank() && repository.isAuthorizedSuperAdminEmail(cleanEmail)
+            if (isSuperAdmin) {
+                val existing = repository.getUserById(uid)
+                val superAdminUser = if (existing != null) {
+                    existing.copy(
+                        name = name.ifBlank { existing.name },
+                        role = UserRole.ADMIN,
+                        isActive = true,
+                        accountStatus = UserAccountStatus.ACTIVE
+                    )
+                } else {
+                    User(
+                        id = uid,
+                        name = name.ifBlank { "প্ল্যাটফর্ম সুপার এডমিন" },
+                        phone = phone.ifBlank { "01700000000" },
+                        role = UserRole.ADMIN,
+                        pinHash = repository.hashPin("1234"),
+                        isActive = true,
+                        accountStatus = UserAccountStatus.ACTIVE
+                    )
+                }
+                repository.saveUserDirect(superAdminUser)
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = uid,
+                    role = UserRole.ADMIN.name
+                )
+                _activeBusinessId.value = uid
+                _currentUser.value = superAdminUser
+                try {
+                    if (syncManager.isCloudBackendConfigured()) {
+                        syncManager.ensureBusinessDocExists(uid, uid)
+                        syncManager.ensureStaffLinked(uid, uid, superAdminUser.phone, superAdminUser.name, UserRole.ADMIN.name)
+                    }
+                } catch (e: Exception) {
+                    Log.w("SuperAdminAuth", "Super admin cloud sync note: ${e.message}")
+                }
+                syncManager.startProductsRealtimeListener()
+                triggerSync()
+                onResult(true, "প্ল্যাটফর্ম সুপার এডমিন কনসোলে স্বাগতম, ${superAdminUser.name}!", UserRole.ADMIN)
+                return@launch
+            }
+
+            // 2. Check if user already exists in Room by Firebase UID
             val existingUserByUid = repository.getUserById(uid)
             if (existingUserByUid != null) {
                 if (!existingUserByUid.isActive || existingUserByUid.accountStatus != UserAccountStatus.ACTIVE) {
@@ -1182,7 +1237,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
 
-            // 2. Check if user already exists by phone (if Google provided verified phone number)
+            // 3. Check if user already exists by phone (if Google provided verified phone number)
             if (phone.isNotBlank()) {
                 val existingUserByPhone = repository.getUserByPhone(phone)
                 if (existingUserByPhone != null) {
@@ -1210,7 +1265,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
             }
 
-            // 3. Check if this is the registered primary business owner (ataurgonee4@gmail.com or authorized admin email)
+            // 4. Check if this is an authorized admin email
             val isPrimaryOwner = cleanEmail.isNotBlank() && repository.isAuthorizedAdminEmail(cleanEmail)
 
             if (isPrimaryOwner) {
@@ -1231,9 +1286,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 _activeBusinessId.value = uid
                 _currentUser.value = adminUser
-                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
-                    syncManager.ensureBusinessDocExists(uid, uid)
-                    syncManager.ensureStaffLinked(uid, uid, adminUser.phone, adminUser.name, UserRole.ADMIN.name)
+                try {
+                    if (syncManager.isCloudBackendConfigured()) {
+                        syncManager.ensureBusinessDocExists(uid, uid)
+                        syncManager.ensureStaffLinked(uid, uid, adminUser.phone, adminUser.name, UserRole.ADMIN.name)
+                    }
+                } catch (e: Exception) {
+                    Log.w("AdminAuth", "Admin cloud sync note: ${e.message}")
                 }
                 syncManager.startProductsRealtimeListener()
                 triggerSync()

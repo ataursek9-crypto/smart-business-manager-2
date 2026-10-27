@@ -8,6 +8,7 @@ import com.example.data.model.User
 import com.example.data.model.UserAccountStatus
 import com.example.data.model.UserRole
 import com.example.data.repository.BusinessRepository
+import com.example.data.repository.SuperAdminRepository
 import com.example.viewmodel.BusinessViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,6 +43,8 @@ class GoogleAuthRoleMappingTest {
         db = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+        AppDatabase.setInstanceForTesting(db)
+        SuperAdminRepository.getInstance(app).resetStateForTesting()
         repo = BusinessRepository(db)
         viewModel = BusinessViewModel(app)
     }
@@ -51,6 +54,8 @@ class GoogleAuthRoleMappingTest {
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         viewModel.syncManager.cancelActiveSync()
         com.example.data.sync.CloudBusinessAuth.clear(app)
+        SuperAdminRepository.getInstance(app).resetStateForTesting()
+        AppDatabase.setInstanceForTesting(null)
         Dispatchers.resetMain()
         db.close()
     }
@@ -221,4 +226,73 @@ class GoogleAuthRoleMappingTest {
         assertFalse("Blank business ID must be rejected", callbackSuccess == true)
         assertTrue("Error must mention business code", callbackMsg!!.contains("বিজনেস কোড"))
     }
+
+    @Test
+    fun `test all authorized Super Admin emails are recognized and grant super admin status`() = runTest(testDispatcher) {
+        val authorizedEmails = listOf(
+            "buddavaibinodon@gmail.com",
+            "ataursek9@gmail.com",
+            "ataurgonee4@gmail.com",
+            "support@smartbiz.local",
+            "gonee8666@gmail.com",
+            "ataulgonee786@gmail.com",
+            "ataurpos@gmail.com",
+            "ataur50305@gmail.com",
+            "a48268993@gmail.com",
+            "jamesfashion792@gmail.com"
+        )
+
+        for (email in authorizedEmails) {
+            assertTrue("Email $email must be recognized as authorized Super Admin", repo.isAuthorizedSuperAdminEmail(email))
+        }
+
+        // Test login with authorized super admin
+        val superAdminEmail = "buddavaibinodon@gmail.com"
+        var loginSuccess: Boolean? = null
+        var loginRole: UserRole? = null
+
+        viewModel.handleGoogleUserCredentials(
+            uid = "super_admin_buddavai_uid",
+            email = superAdminEmail,
+            displayName = "Super Admin Test",
+            phoneNumber = null
+        ) { success, _, role ->
+            loginSuccess = success
+            loginRole = role
+        }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+        assertTrue("Super Admin login must succeed", loginSuccess == true)
+        assertEquals(UserRole.ADMIN, loginRole)
+        assertTrue("viewModel.isSuperAdminUser() must be true for authorized email", viewModel.isSuperAdminUser())
+        assertEquals(superAdminEmail, viewModel.getSuperAdminEmail())
+    }
+
+    @Test
+    fun `test regular Google user is NOT granted Super Admin access`() = runTest(testDispatcher) {
+        val regularEmail = "ordinary.shopkeeper@example.com"
+        assertFalse(repo.isAuthorizedSuperAdminEmail(regularEmail))
+
+        var loginSuccess: Boolean? = null
+        var loginRole: UserRole? = null
+
+        viewModel.handleGoogleUserCredentials(
+            uid = "regular_shopkeeper_uid_99",
+            email = regularEmail,
+            displayName = "দোকানদার ভাই",
+            phoneNumber = null
+        ) { success, _, role ->
+            loginSuccess = success
+            loginRole = role
+        }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+        assertFalse("Unlinked regular user should not log in directly without linking or registration", loginSuccess == true)
+        assertFalse("viewModel.isSuperAdminUser() must be FALSE for regular user", viewModel.isSuperAdminUser())
+    }
 }
+

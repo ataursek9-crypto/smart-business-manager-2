@@ -304,10 +304,10 @@ fun AdminLoginScreen(
                                     viewModel.handleGoogleSignInSuccess(fUser) { success, msg, role ->
                                         isGoogleLoading = false
                                         if (success) {
-                                            if (role == UserRole.ADMIN) {
+                                            if (role == UserRole.ADMIN || viewModel.isSuperAdminUser()) {
                                                 onAdminLoginSuccess()
                                             } else {
-                                                errorMessage = "অননুমোদিত অ্যাকাউন্ট! শুধুমাত্র অ্যাডমিন গুগল অ্যাকাউন্ট প্রবেশ করতে পারবেন।"
+                                                errorMessage = "অননুমোদিত অ্যাকাউন্ট! শুধুমাত্র অ্যাডমিন অথবা সুপার অ্যাডমিন গুগল অ্যাকাউন্ট প্রবেশ করতে পারবেন।"
                                             }
                                         } else {
                                             errorMessage = msg

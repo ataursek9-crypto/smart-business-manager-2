@@ -702,6 +702,29 @@ fun LoginScreen(
                             fontWeight = FontWeight.Medium
                         )
                     }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Text(
+                        text = "নতুন দোকানদার? কোনো বিদ্যমান দোকানে যুক্ত না হয়ে নতুন দোকান খুলতে চাইলে:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedButton(
+                        onClick = {
+                            pendingGoogleUser = null
+                            onNavigateToRegistration()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("google_link_register_new_shop_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("নতুন দোকান খুলুন (প্রথম অ্যাডমিন)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             },
             confirmButton = {

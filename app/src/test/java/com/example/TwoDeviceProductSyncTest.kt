@@ -59,6 +59,8 @@ class TwoDeviceProductSyncTest {
 
     @After
     fun tearDown() {
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
         Dispatchers.resetMain()
         adminDb.close()
         salesmanDb.close()
@@ -225,6 +227,9 @@ class TwoDeviceProductSyncTest {
 
         assertFalse("Unregistered Google user must not be granted access", googleLoginSuccess == true)
         assertNull("Current active user must remain null", viewModel.currentUser.value)
+        viewModel.syncManager.cancelActiveSync()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
     }
 
     // 6. Duplicate Product Prevention (Idempotency)
@@ -365,5 +370,8 @@ class TwoDeviceProductSyncTest {
         }
         assertTrue(called)
         assertTrue(errMsg.contains("কোড"))
+        vm.syncManager.cancelActiveSync()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        testDispatcher.scheduler.advanceUntilIdle()
     }
 }

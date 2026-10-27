@@ -48,8 +48,8 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    const val APK_SIGNING_SHA1 = "3E:97:F3:6A:C6:68:6A:CF:A2:63:A2:E7:9B:F7:38:F9:73:3D:47:01"
-    const val APK_SIGNING_SHA256 = "B2:B8:04:78:24:3F:E5:5B:1C:C7:7F:2D:F9:FF:E7:2C:AE:01:09:C5:74:F4:76:A8:43:54:6A:0D:D4:7A:19:36"
+    const val APK_SIGNING_SHA1 = "6B:F4:A7:D9:19:2E:89:E2:B8:26:14:07:02:E1:82:80:88:39:EE:AA"
+    const val APK_SIGNING_SHA256 = "5F:0B:5E:E0:40:5A:A6:C7:F2:CA:9E:4B:AF:DD:58:9A:6A:43:97:FB:F4:9A:92:24:E9:E6:E9:9F:54:0A:3D:A4"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 

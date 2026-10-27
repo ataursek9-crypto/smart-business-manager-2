@@ -44,6 +44,8 @@ class ShopIsolationAndGoogleAuthTest {
         db = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+        AppDatabase.setInstanceForTesting(db)
+        SuperAdminRepository.getInstance(app).resetStateForTesting()
         repo = BusinessRepository(db)
         viewModel = BusinessViewModel(app)
     }
@@ -53,6 +55,8 @@ class ShopIsolationAndGoogleAuthTest {
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         viewModel.syncManager.cancelActiveSync()
         com.example.data.sync.CloudBusinessAuth.clear(app)
+        SuperAdminRepository.getInstance(app).resetStateForTesting()
+        AppDatabase.setInstanceForTesting(null)
         Dispatchers.resetMain()
         db.close()
     }
@@ -61,6 +65,7 @@ class ShopIsolationAndGoogleAuthTest {
     fun `test newly registered shop starts with only the owner admin in staff list`() = runTest(testDispatcher) {
         var registerSuccess: Boolean? = null
         var registeredShopId: String? = null
+        var registerMsg: String? = null
 
         viewModel.registerNewShop(
             shopName = "নিউ ফ্যাশন স্টোর",
@@ -71,8 +76,9 @@ class ShopIsolationAndGoogleAuthTest {
             businessType = "গার্মেন্টস ও ফ্যাশন",
             pin = "4321",
             isPhoneVerified = true
-        ) { success, _, shopId ->
+        ) { success, msg, shopId ->
             registerSuccess = success
+            registerMsg = msg
             registeredShopId = shopId
         }
 
@@ -80,7 +86,7 @@ class ShopIsolationAndGoogleAuthTest {
         testDispatcher.scheduler.advanceUntilIdle()
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
-        assertTrue("Registration must succeed", registerSuccess == true)
+        assertTrue("Registration must succeed: $registerMsg", registerSuccess == true)
         assertNotNull("ShopId must be generated", registeredShopId)
 
         // Check active business and current user

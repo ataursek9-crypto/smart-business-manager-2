@@ -121,6 +121,7 @@ fun SmartBusinessApp(
             }
         } else {
             val role = currentUser?.role
+            val isSuperAdmin = viewModel.isSuperAdminUser()
             val adminOnlyScreens = setOf(
                 AppScreen.ADMIN_DASHBOARD,
                 AppScreen.SETTINGS,
@@ -131,10 +132,12 @@ fun SmartBusinessApp(
                 AppScreen.DATA_PROTECTION_CENTER,
                 AppScreen.SUPER_ADMIN_DASHBOARD
             )
-            if (role != UserRole.ADMIN && currentScreen in adminOnlyScreens) {
+            if (role != UserRole.ADMIN && !isSuperAdmin && currentScreen in adminOnlyScreens) {
                 currentScreen = AppScreen.SALESMAN_DASHBOARD
             } else if (currentScreen == AppScreen.LOGIN || currentScreen == AppScreen.ADMIN_LOGIN) {
-                currentScreen = if (role == UserRole.ADMIN) {
+                currentScreen = if (isSuperAdmin) {
+                    AppScreen.SUPER_ADMIN_DASHBOARD
+                } else if (role == UserRole.ADMIN) {
                     AppScreen.ADMIN_DASHBOARD
                 } else {
                     AppScreen.SALESMAN_DASHBOARD
@@ -203,7 +206,9 @@ fun SmartBusinessApp(
                             currentScreen = AppScreen.SHOP_REGISTRATION
                         },
                         onLoginSuccess = {
-                            currentScreen = if (viewModel.currentUser.value?.role == UserRole.ADMIN) {
+                            currentScreen = if (viewModel.isSuperAdminUser()) {
+                                AppScreen.SUPER_ADMIN_DASHBOARD
+                            } else if (viewModel.currentUser.value?.role == UserRole.ADMIN) {
                                 AppScreen.ADMIN_DASHBOARD
                             } else {
                                 AppScreen.SALESMAN_DASHBOARD
@@ -222,7 +227,11 @@ fun SmartBusinessApp(
                             currentScreen = AppScreen.SHOP_REGISTRATION
                         },
                         onAdminLoginSuccess = {
-                            currentScreen = AppScreen.ADMIN_DASHBOARD
+                            currentScreen = if (viewModel.isSuperAdminUser()) {
+                                AppScreen.SUPER_ADMIN_DASHBOARD
+                            } else {
+                                AppScreen.ADMIN_DASHBOARD
+                            }
                         }
                     )
                 }
