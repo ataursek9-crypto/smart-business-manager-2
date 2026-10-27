@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -778,7 +779,13 @@ fun SalesmenManagementScreen(
     BackHandler { onBack() }
     val context = LocalContext.current
     val users by viewModel.users.collectAsStateWithLifecycle()
+    val companySettings by viewModel.companySettings.collectAsStateWithLifecycle()
+    val currentAdmin by viewModel.currentUser.collectAsStateWithLifecycle()
+    val activeShopId = viewModel.getActiveBusinessId().ifBlank { currentAdmin?.shopId ?: "" }
+
     var showAddDialog by remember { mutableStateOf(false) }
+    var userToResetPin by remember { mutableStateOf<User?>(null) }
+    var userToEdit by remember { mutableStateOf<User?>(null) }
 
     // Status Change Dialog State
     var selectedUserForStatusChange by remember { mutableStateOf<User?>(null) }
@@ -796,7 +803,10 @@ fun SalesmenManagementScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showAddDialog = true }) {
+                    IconButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.testTag("btn_add_new_staff")
+                    ) {
                         Icon(Icons.Default.PersonAdd, contentDescription = "নতুন স্টাফ", tint = Color.White)
                     }
                 },
@@ -816,9 +826,64 @@ fun SalesmenManagementScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(users) { u ->
+            // Shop Identity Banner
+            item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8EAF6))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Storefront,
+                            contentDescription = null,
+                            tint = Color(0xFF3949AB),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = companySettings.businessName.ifBlank { "আমার দোকান" },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = Color(0xFF1A237E)
+                            )
+                            Text(
+                                text = "দোকান কোড: ${if (activeShopId.isNotBlank()) activeShopId else "স্বত্বাধিকারী"} • স্টাফ সংখ্যা: ${users.size} জন",
+                                fontSize = 12.sp,
+                                color = Color(0xFF3949AB)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (users.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "এই দোকানে এখনও কোনো অতিরিক্ত কর্মী যুক্ত করা হয়নি।\nউপরে '+' বাটনে ক্লিক করে নতুন স্টাফ যুক্ত করুন।",
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.outline,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            items(users, key = { it.id }) { u ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("staff_card_${u.phone}"),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = when (u.accountStatus) {
@@ -835,8 +900,23 @@ fun SalesmenManagementScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(u.name, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                Text("ফোন: ${u.phone} • পদবী: ${u.role}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(u.name, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = if (u.role == UserRole.ADMIN) Color(0xFFE3F2FD) else Color(0xFFEDE7F6)
+                                    ) {
+                                        Text(
+                                            text = if (u.role == UserRole.ADMIN) "এডমিন" else "সেলসম্যান",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (u.role == UserRole.ADMIN) Color(0xFF1565C0) else Color(0xFF512DA8),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text("মোবাইল: ${u.phone}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
                             }
 
                             // Status Badge
@@ -878,22 +958,58 @@ fun SalesmenManagementScreen(
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            "অনুমতি: ${if (u.canDiscount) "ডিসকাউন্ট দেওয়া" else "ডিসকাউন্ট বন্ধ"}, ${if (u.canCollectPayment) "টাকা আদায়" else ""}",
+                            text = "অনুমতি: ${if (u.canDiscount) "ডিসকাউন্ট" else "ডিসকাউন্ট বন্ধ"} • ${if (u.canCollectPayment) "টাকা আদায়" else "আদায় বন্ধ"} • ${if (u.canApplyExpense) "খরচ এন্ট্রি" else "খরচ বন্ধ"}",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        // Action Buttons for Salesman Management (Suspend / Deactivate / Reactivate)
-                        if (u.role == UserRole.SALESMAN) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                            Spacer(modifier = Modifier.height(8.dp))
+                        val joinDateStr = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+                            .format(java.util.Date(u.createdAt))
+                        Text(
+                            text = "যুক্ত হয়েছেন: $joinDateStr",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End,
-                                verticalAlignment = Alignment.CenterVertically
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Action Buttons: Edit, Reset PIN, Suspend / Reactivate
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Edit Profile & Permissions
+                            OutlinedButton(
+                                onClick = { userToEdit = u },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("btn_edit_staff_${u.phone}")
                             ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("এডিট", fontSize = 11.sp)
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // Reset PIN
+                            OutlinedButton(
+                                onClick = { userToResetPin = u },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("btn_reset_pin_${u.phone}")
+                            ) {
+                                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("পিন রিসেট", fontSize = 11.sp)
+                            }
+
+                            // Don't allow suspending self
+                            if (u.id != currentAdmin?.id) {
+                                Spacer(modifier = Modifier.width(6.dp))
                                 when (u.accountStatus) {
                                     UserAccountStatus.ACTIVE -> {
                                         OutlinedButton(
@@ -906,12 +1022,12 @@ fun SalesmenManagementScreen(
                                             shape = RoundedCornerShape(8.dp),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.PauseCircle, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.PauseCircle, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Suspend (স্থগিত)", fontSize = 11.sp, color = AccentAmber)
+                                            Text("স্থগিত", fontSize = 11.sp, color = AccentAmber)
                                         }
 
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
 
                                         OutlinedButton(
                                             onClick = {
@@ -923,9 +1039,9 @@ fun SalesmenManagementScreen(
                                             shape = RoundedCornerShape(8.dp),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.Block, contentDescription = null, tint = AccentRed, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Block, contentDescription = null, tint = AccentRed, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Deactivate (বিচ্ছিন্ন)", fontSize = 11.sp, color = AccentRed)
+                                            Text("বিচ্ছিন্ন", fontSize = 11.sp, color = AccentRed)
                                         }
                                     }
 
@@ -941,24 +1057,9 @@ fun SalesmenManagementScreen(
                                             colors = ButtonDefaults.buttonColors(containerColor = AccentGreen),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Reactivate (পুনঃসক্রিয়)", fontSize = 11.sp)
-                                        }
-
-                                        Spacer(modifier = Modifier.width(8.dp))
-
-                                        OutlinedButton(
-                                            onClick = {
-                                                selectedUserForStatusChange = u
-                                                targetStatus = UserAccountStatus.DEACTIVATED
-                                                statusReasonInput = ""
-                                                statusChangeError = ""
-                                            },
-                                            shape = RoundedCornerShape(8.dp),
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Text("Deactivate", fontSize = 11.sp, color = AccentRed)
+                                            Text("সক্রিয়", fontSize = 11.sp)
                                         }
                                     }
 
@@ -974,9 +1075,9 @@ fun SalesmenManagementScreen(
                                             colors = ButtonDefaults.buttonColors(containerColor = AccentGreen),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                         ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Reactivate (পুনঃসক্রিয়)", fontSize = 11.sp)
+                                            Text("সক্রিয়", fontSize = 11.sp)
                                         }
                                     }
                                 }
@@ -1002,12 +1103,12 @@ fun SalesmenManagementScreen(
             title = { Text("স্টাফ অ্যাকাউন্ট $actionName নিশ্চিতকরণ", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("সেলসম্যান: ${userToChange.name} (${userToChange.phone})", fontWeight = FontWeight.Bold)
+                    Text("কর্মী: ${userToChange.name} (${userToChange.phone})", fontWeight = FontWeight.Bold)
                     Text(
                         text = when (targetStatus) {
-                            UserAccountStatus.SUSPENDED -> "সতর্কতা: স্থগিত অবস্থায় এই সেলসম্যান সিস্টেমে লগইন করতে পারবে না এবং কোনো নতুন বিক্রি, কালেকশন বা খরচ এন্ট্রি করতে পারবে না।"
-                            UserAccountStatus.DEACTIVATED -> "সতর্কতা: ডিঅ্যাক্টিভেট করলে অ্যাকাউন্ট সম্পূর্ণ বিচ্ছিন্ন হয়ে যাবে। তবে পূর্ববর্তী সমস্ত বিক্রি ও হিসাব অটুট থাকবে।"
-                            UserAccountStatus.ACTIVE -> "এই সেলসম্যান পুনরায় সিস্টেমে লগইন করে স্বাভাবিক ফিল্ড কার্যক্রম পরিচালনা করতে পারবে।"
+                            UserAccountStatus.SUSPENDED -> "সতর্কতা: স্থগিত অবস্থায় এই কর্মী সিস্টেমে লগইন করতে পারবে না এবং কোনো নতুন বিক্রি, কালেকশন বা খরচ করতে পারবে না।"
+                            UserAccountStatus.DEACTIVATED -> "সতর্কতা: ডিঅ্যাক্টিভেট করলে অ্যাকাউন্ট সম্পূর্ণ বিচ্ছিন্ন হয়ে যাবে। পূর্ববর্তী সমস্ত হিসাব অপরিবর্তিত থাকবে।"
+                            UserAccountStatus.ACTIVE -> "এই কর্মী পুনরায় সিস্টেমে লগইন করে স্বাভাবিক ব্যবসায়িক কার্যক্রম পরিচালনা করতে পারবে।"
                         },
                         fontSize = 12.sp,
                         color = if (targetStatus == UserAccountStatus.ACTIVE) AccentGreen else AccentRed
@@ -1061,24 +1162,174 @@ fun SalesmenManagementScreen(
         )
     }
 
+    // Modal PIN Reset Dialog
+    if (userToResetPin != null) {
+        val target = userToResetPin!!
+        var newPin by remember { mutableStateOf("") }
+        var resetError by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { userToResetPin = null },
+            title = { Text("স্টাফের পিন কোড রিসেট", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("কর্মী: ${target.name} (${target.phone})", fontWeight = FontWeight.Bold)
+                    Text("নতুন ৪ থেকে ৬ সংখ্যার পিন কোড নির্ধারণ করুন:", fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = newPin,
+                        onValueChange = { newPin = it },
+                        label = { Text("নতুন পিন কোড *") },
+                        placeholder = { Text("যেমন: 5678") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (resetError.isNotBlank()) {
+                        Text(resetError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newPin.trim().length < 4 || newPin.trim().length > 6) {
+                            resetError = "পিন কোড ৪ থেকে ৬ সংখ্যার হতে হবে!"
+                            return@Button
+                        }
+                        viewModel.resetStaffPin(target.id, newPin.trim()) { success, msg ->
+                            if (success) {
+                                userToResetPin = null
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                resetError = msg
+                            }
+                        }
+                    }
+                ) {
+                    Text("পিন আপডেট করুন")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { userToResetPin = null }) { Text("বাতিল") }
+            }
+        )
+    }
+
+    // Modal Edit Staff Profile & Permissions Dialog
+    if (userToEdit != null) {
+        val target = userToEdit!!
+        var editName by remember { mutableStateOf(target.name) }
+        var editRole by remember { mutableStateOf(target.role) }
+        var editCanDiscount by remember { mutableStateOf(target.canDiscount) }
+        var editCanViewDue by remember { mutableStateOf(target.canViewCustomerDue) }
+        var editCanCollectPayment by remember { mutableStateOf(target.canCollectPayment) }
+        var editCanApplyExpense by remember { mutableStateOf(target.canApplyExpense) }
+        var editError by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { userToEdit = null },
+            title = { Text("স্টাফের তথ্য ও অনুমতি সম্পাদনা", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("নাম *") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Text("মোবাইল: ${target.phone} (অপরিবর্তনযোগ্য)", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+
+                    Text("পদবী নির্বাচন:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = editRole == UserRole.SALESMAN, onClick = { editRole = UserRole.SALESMAN })
+                        Text("সেলসম্যান", fontSize = 13.sp)
+                        Spacer(modifier = Modifier.width(16.dp))
+                        RadioButton(selected = editRole == UserRole.ADMIN, onClick = { editRole = UserRole.ADMIN })
+                        Text("সহকারী এডমিন", fontSize = 13.sp)
+                    }
+
+                    Text("অনুমতিসমূহ:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editCanDiscount, onCheckedChange = { editCanDiscount = it })
+                        Text("ডিসকাউন্ট অনুমোদন", fontSize = 13.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editCanViewDue, onCheckedChange = { editCanViewDue = it })
+                        Text("কাস্টমার বকেয়া দেখা", fontSize = 13.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editCanCollectPayment, onCheckedChange = { editCanCollectPayment = it })
+                        Text("বকেয়া টাকা আদায়", fontSize = 13.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editCanApplyExpense, onCheckedChange = { editCanApplyExpense = it })
+                        Text("খরচ এন্ট্রি", fontSize = 13.sp)
+                    }
+
+                    if (editError.isNotBlank()) {
+                        Text(editError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editName.trim().length < 2) {
+                            editError = "সঠিক নাম লিখুন!"
+                            return@Button
+                        }
+                        val updated = target.copy(
+                            name = editName.trim(),
+                            role = editRole,
+                            canDiscount = editCanDiscount,
+                            canViewCustomerDue = editCanViewDue,
+                            canCollectPayment = editCanCollectPayment,
+                            canApplyExpense = editCanApplyExpense
+                        )
+                        viewModel.updateStaffProfile(updated) { success, msg ->
+                            if (success) {
+                                userToEdit = null
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                editError = msg
+                            }
+                        }
+                    }
+                ) {
+                    Text("সংরক্ষণ করুন")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { userToEdit = null }) { Text("বাতিল") }
+            }
+        )
+    }
+
+    // Modal Add Staff Dialog
     if (showAddDialog) {
         var name by remember { mutableStateOf("") }
         var phone by remember { mutableStateOf("") }
         var pin by remember { mutableStateOf("") }
+        var role by remember { mutableStateOf(UserRole.SALESMAN) }
         var canDiscount by remember { mutableStateOf(true) }
+        var canCollectPayment by remember { mutableStateOf(true) }
+        var canApplyExpense by remember { mutableStateOf(true) }
+        var addError by remember { mutableStateOf("") }
 
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("নতুন সেলসম্যান যোগ করুন", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            title = { Text("নতুন কর্মী যোগ করুন", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("নাম *") },
-                        placeholder = { Text("সেলসম্যানের পুরো নাম") },
+                        placeholder = { Text("কর্মীর পুরো নাম") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("input_staff_name")
                     )
                     OutlinedTextField(
                         value = phone,
@@ -1087,38 +1338,68 @@ fun SalesmenManagementScreen(
                         placeholder = { Text("01XXXXXXXXX") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("input_staff_phone")
                     )
                     OutlinedTextField(
                         value = pin,
                         onValueChange = { pin = it },
                         label = { Text("গোপন পিন কোড *") },
-                        placeholder = { Text("ন্যূনতম ৪ সংখ্যার পিন") },
+                        placeholder = { Text("৪ থেকে ৬ সংখ্যার পিন") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("input_staff_pin")
                     )
+
+                    Text("পদবী:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = role == UserRole.SALESMAN, onClick = { role = UserRole.SALESMAN })
+                        Text("সেলসম্যান", fontSize = 13.sp)
+                        Spacer(modifier = Modifier.width(16.dp))
+                        RadioButton(selected = role == UserRole.ADMIN, onClick = { role = UserRole.ADMIN })
+                        Text("সহকারী এডমিন", fontSize = 13.sp)
+                    }
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = canDiscount, onCheckedChange = { canDiscount = it })
-                        Text("ডিসকাউন্ট দেওয়ার অনুমতি দিন", fontSize = 13.sp)
+                        Text("ডিসকাউন্ট দেওয়ার অনুমতি", fontSize = 13.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = canCollectPayment, onCheckedChange = { canCollectPayment = it })
+                        Text("বকেয়া টাকা আদায়", fontSize = 13.sp)
+                    }
+
+                    if (addError.isNotBlank()) {
+                        Text(addError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (name.isNotBlank() && phone.isNotBlank() && pin.isNotBlank()) {
-                            viewModel.createSalesman(
-                                name = name.trim(),
-                                phone = phone.trim(),
-                                rawPin = pin.trim(),
-                                canDiscount = canDiscount
-                            ) {
+                        if (name.isBlank() || phone.isBlank() || pin.isBlank()) {
+                            addError = "সকল প্রয়োজনীয় তথ্য পূরণ করুন!"
+                            return@Button
+                        }
+                        viewModel.createStaffMember(
+                            name = name.trim(),
+                            phone = phone.trim(),
+                            rawPin = pin.trim(),
+                            role = role,
+                            canDiscount = canDiscount,
+                            canViewCustomerDue = true,
+                            canCollectPayment = canCollectPayment,
+                            canApplyExpense = canApplyExpense
+                        ) { success, msg ->
+                            if (success) {
                                 showAddDialog = false
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                addError = msg
                             }
                         }
-                    }
+                    },
+                    modifier = Modifier.testTag("btn_save_new_staff")
                 ) {
                     Text("সংরক্ষণ করুন")
                 }

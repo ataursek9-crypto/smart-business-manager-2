@@ -37,6 +37,10 @@ object BengaliFormatter {
         return bdFormat.format(number)
     }
 
+    fun formatNumber(number: Long): String {
+        return bdFormat.format(number)
+    }
+
     fun formatCurrency(amount: Double): String {
         return "৳ " + String.format(Locale.US, "%,.2f", amount)
     }

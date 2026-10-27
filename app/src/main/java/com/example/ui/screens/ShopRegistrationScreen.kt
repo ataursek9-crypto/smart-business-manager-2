@@ -571,6 +571,7 @@ fun ShopRegistrationScreen(
                                 district = cleanDistrict,
                                 businessType = selectedBusinessType,
                                 pin = cleanPin,
+                                isPhoneVerified = isPhoneVerified,
                                 superAdminViewModel = superAdminViewModel
                             ) { success, msg, newShopId ->
                                 isLoading = false

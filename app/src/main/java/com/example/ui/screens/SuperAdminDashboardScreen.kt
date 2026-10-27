@@ -6,8 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -128,6 +132,7 @@ fun SuperAdminDashboardScreen(
     var businessToSuspend by remember { mutableStateOf<PlatformBusiness?>(null) }
     var businessToChangePlan by remember { mutableStateOf<PlatformBusiness?>(null) }
     var businessToSendNotice by remember { mutableStateOf<PlatformBusiness?>(null) }
+    var businessToSchedulePolicy by remember { mutableStateOf<PlatformBusiness?>(null) }
     var paymentToReview by remember { mutableStateOf<PlatformPayment?>(null) }
     var planToEdit by remember { mutableStateOf<SubscriptionPlan?>(null) }
 
@@ -323,7 +328,7 @@ fun SuperAdminDashboardScreen(
                 val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale("bn", "BD")) }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("বিজনেস আইডি: ${b.id}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    Text("মালিক: ${b.ownerName} (${b.ownerPhone})")
+                    Text("মালিক: ${b.ownerName} (${b.ownerPhone})${if (b.phoneVerified) " ✓ মোবাইল যাচাইকৃত" else ""}")
                     if (b.ownerEmail.isNotBlank()) Text("ইমেইল: ${b.ownerEmail}", fontSize = 13.sp)
                     Text("ব্যবসার ধরন: ${b.businessType}", fontWeight = FontWeight.Medium)
                     if (b.address.isNotBlank() || b.district.isNotBlank()) {
@@ -335,6 +340,7 @@ fun SuperAdminDashboardScreen(
                     }
                     Text("বর্তমান প্ল্যান: ${b.planName} (কর্মী সীমা: ${b.maxStaffAllowed})")
                     Text("রেজিস্ট্রেশন: ${dateFormat.format(Date(b.createdAt))}", fontSize = 12.sp)
+                    Text("প্রথম ব্যবহার: ${dateFormat.format(Date(b.firstUseAt))}  •  সর্বশেষ সক্রিয়: ${dateFormat.format(Date(b.lastActiveAt))}", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
                     Text("ব্যবহৃত দিন (Elapsed): ${BengaliFormatter.formatNumber(b.elapsedDays)} দিন  •  সক্রিয় দিন (Active): ${BengaliFormatter.formatNumber(b.activeDays)} দিন", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                     if (b.isAutoExpiryDisabled) {
                         Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(6.dp)) {
@@ -345,7 +351,28 @@ fun SuperAdminDashboardScreen(
                     }
                     if (b.hasActiveNotice) {
                         Surface(color = Color(0xFFFFF3E0), shape = RoundedCornerShape(6.dp)) {
-                            Text("প্রস্তাবিত মাসিক ফি: ৳${BengaliFormatter.formatCurrency(b.proposedFee)}${if (b.subscriptionNoticeNote.isNotBlank()) " | নোট: ${b.subscriptionNoticeNote}" else ""}", color = Color(0xFFE65100), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                Text("প্রস্তাবিত মাসিক ফি: ৳${BengaliFormatter.formatCurrency(b.proposedFee)}", color = Color(0xFFE65100), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                if (b.proposedStartDate != null) {
+                                    Text("কার্যকরের প্রস্তাবিত তারিখ: ${dateFormat.format(Date(b.proposedStartDate))}", color = Color(0xFFE65100), fontSize = 10.sp)
+                                }
+                                if (b.noticeReminderDate != null) {
+                                    Text("রিমাইন্ডার তারিখ: ${dateFormat.format(Date(b.noticeReminderDate))}", color = Color(0xFFE65100), fontSize = 10.sp)
+                                }
+                                if (b.subscriptionNoticeNote.isNotBlank()) {
+                                    Text("নোট: ${b.subscriptionNoticeNote}", color = Color(0xFFE65100), fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (b.scheduledPolicyChange.isNotBlank()) {
+                        Surface(color = Color(0xFFE1F5FE), shape = RoundedCornerShape(6.dp)) {
+                            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                Text("শিডিউলকৃত ভবিষ্যৎ পলিসি: ${b.scheduledPolicyChange}", color = Color(0xFF0277BD), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                if (b.scheduledPolicyEffectiveAt != null) {
+                                    Text("কার্যকরের নির্ধারিত তারিখ: ${dateFormat.format(Date(b.scheduledPolicyEffectiveAt))}", color = Color(0xFF0277BD), fontSize = 10.sp)
+                                }
+                            }
                         }
                     }
                     if (b.statusReason.isNotBlank()) {
@@ -361,7 +388,7 @@ fun SuperAdminDashboardScreen(
                                 businessToSendNotice = b
                                 businessToManage = null
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).testTag("dialog_send_notice_button")
                         ) {
                             Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
@@ -369,35 +396,48 @@ fun SuperAdminDashboardScreen(
                         }
                         OutlinedButton(
                             onClick = {
+                                businessToSchedulePolicy = b
+                                businessToManage = null
+                            },
+                            modifier = Modifier.weight(1f).testTag("dialog_schedule_policy_button")
+                        ) {
+                            Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("পলিসি শিডিউল", fontSize = 12.sp)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
                                 businessToChangePlan = b
                                 businessToManage = null
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).testTag("dialog_change_plan_button")
                         ) {
                             Text("প্ল্যান পরিবর্তন", fontSize = 12.sp)
                         }
-                    }
-                    if (b.status == BusinessAccountStatus.ACTIVE) {
-                        Button(
-                            onClick = {
-                                businessToSuspend = b
-                                businessToManage = null
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("সাময়িক স্থগিত করুন")
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                viewModel.activateBusiness(b, actorUid, actorName, currentSuperAdminEmail)
-                                businessToManage = null
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("সক্রিয় করুন")
+                        if (b.status == BusinessAccountStatus.ACTIVE) {
+                            Button(
+                                onClick = {
+                                    businessToSuspend = b
+                                    businessToManage = null
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.weight(1f).testTag("dialog_suspend_button")
+                            ) {
+                                Text("সাময়িক স্থগিত", fontSize = 12.sp)
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    viewModel.activateBusiness(b, actorUid, actorName, currentSuperAdminEmail)
+                                    businessToManage = null
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                                modifier = Modifier.weight(1f).testTag("dialog_activate_button")
+                            ) {
+                                Text("সক্রিয় করুন", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -426,6 +466,25 @@ fun SuperAdminDashboardScreen(
                 businessToSendNotice = null
             },
             onDismiss = { businessToSendNotice = null }
+        )
+    }
+
+    // Schedule Policy Dialog
+    businessToSchedulePolicy?.let { b ->
+        SchedulePolicyChangeDialog(
+            business = b,
+            onConfirm = { policyDesc, effectiveDate ->
+                viewModel.schedulePolicyChange(
+                    business = b,
+                    policyDescription = policyDesc,
+                    effectiveDate = effectiveDate,
+                    actorUid = actorUid,
+                    actorName = actorName,
+                    actorEmail = currentSuperAdminEmail
+                )
+                businessToSchedulePolicy = null
+            },
+            onDismiss = { businessToSchedulePolicy = null }
         )
     }
 
@@ -1407,6 +1466,103 @@ fun SendSubscriptionNoticeDialog(
                 modifier = Modifier.testTag("confirm_send_notice_button")
             ) {
                 Text("নোটিশ প্রেরণ করুন")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("বাতিল")
+            }
+        }
+    )
+}
+
+@Composable
+fun SchedulePolicyChangeDialog(
+    business: PlatformBusiness,
+    onConfirm: (policyDescription: String, effectiveDate: Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var policyText by remember { mutableStateOf(business.scheduledPolicyChange.ifBlank { "মাসিক প্রিমিয়াম সাবস্ক্রিপশন পলিসি কার্যকর" }) }
+    var effectiveDaysStr by remember { mutableStateOf("30") }
+    var errorMessage by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(Icons.Default.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
+        },
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("ভবিষ্যতের পলিসি পরিবর্তন শিডিউল", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Text(business.businessName, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Surface(
+                    color = Color(0xFFE8F5E9),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "সতর্কতা: এটি একটি নির্ধারিত ভবিষ্যত নীতিমালা। প্রস্তাবিত তারিখ আসার পূর্বে দোকানদারের ফ্রি ব্যবহার কোনো অবস্থাতেই বন্ধ হবে না।",
+                            fontSize = 11.sp,
+                            color = Color(0xFF1B5E20),
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = policyText,
+                    onValueChange = { policyText = it; errorMessage = "" },
+                    label = { Text("পলিসি বিবরণ *") },
+                    placeholder = { Text("যেমন: মাসিক প্রিমিয়াম সাবস্ক্রিপশন প্যাকেজ কার্যকর") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("schedule_policy_text_input")
+                )
+
+                OutlinedTextField(
+                    value = effectiveDaysStr,
+                    onValueChange = { effectiveDaysStr = it.filter { c -> c.isDigit() }; errorMessage = "" },
+                    label = { Text("কত দিন পর কার্যকর হবে (দিন) *") },
+                    placeholder = { Text("যেমন: ৩০") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("schedule_policy_days_input")
+                )
+
+                if (errorMessage.isNotBlank()) {
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val cleanPolicy = policyText.trim()
+                    val days = effectiveDaysStr.toLongOrNull() ?: 0L
+                    if (cleanPolicy.isBlank()) {
+                        errorMessage = "পলিসির বিবরণ লিখুন!"
+                        return@Button
+                    }
+                    if (days <= 0) {
+                        errorMessage = "সঠিক কার্যকরের দিন নির্ধারণ করুন (কমপক্ষে ১ দিন)!"
+                        return@Button
+                    }
+                    val effectiveTime = System.currentTimeMillis() + (days * 24L * 60 * 60 * 1000)
+                    onConfirm(cleanPolicy, effectiveTime)
+                },
+                modifier = Modifier.testTag("confirm_schedule_policy_button")
+            ) {
+                Text("পলিসি শিডিউল করুন")
             }
         },
         dismissButton = {

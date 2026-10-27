@@ -85,7 +85,8 @@ class BusinessRepository(
                 role = UserRole.ADMIN,
                 pinHash = adminPin,
                 isActive = true,
-                accountStatus = UserAccountStatus.ACTIVE
+                accountStatus = UserAccountStatus.ACTIVE,
+                shopId = "biz_smart_store_1"
             )
             val salesman = User(
                 id = "salesman_1",
@@ -94,7 +95,8 @@ class BusinessRepository(
                 role = UserRole.SALESMAN,
                 pinHash = adminPin,
                 isActive = true,
-                accountStatus = UserAccountStatus.ACTIVE
+                accountStatus = UserAccountStatus.ACTIVE,
+                shopId = "biz_smart_store_1"
             )
             db.userDao().insertUser(admin)
             db.userDao().insertUser(salesman)
@@ -269,10 +271,23 @@ class BusinessRepository(
                 )
             )
         } else {
-            // Ensure Admin name is updated to "মোঃ আতাউর রহমান" if it has old name
+            // Ensure Admin name is updated to "মোঃ আতাউর রহমান" if it has old name, and assign legacy shopId
             val existingAdmin = db.userDao().getUserById("admin_1")
-            if (existingAdmin != null && existingAdmin.name != "মোঃ আতাউর রহমান") {
-                db.userDao().updateUser(existingAdmin.copy(name = "মোঃ আতাউর রহমান"))
+            if (existingAdmin != null) {
+                var updated = existingAdmin
+                if (updated.name != "মোঃ আতাউর রহমান") {
+                    updated = updated.copy(name = "মোঃ আতাউর রহমান")
+                }
+                if (updated.shopId.isBlank()) {
+                    updated = updated.copy(shopId = "biz_smart_store_1")
+                }
+                if (updated != existingAdmin) {
+                    db.userDao().updateUser(updated)
+                }
+            }
+            val existingSalesman = db.userDao().getUserById("salesman_1")
+            if (existingSalesman != null && existingSalesman.shopId.isBlank()) {
+                db.userDao().updateUser(existingSalesman.copy(shopId = "biz_smart_store_1"))
             }
         }
     }
@@ -369,7 +384,8 @@ class BusinessRepository(
         address: String,
         district: String,
         businessType: String,
-        pin: String
+        pin: String,
+        shopId: String = ""
     ): Result<Pair<User, CompanySettings>> {
         val cleanPhone = phone.trim()
         val cleanShopName = shopName.trim()
@@ -394,6 +410,7 @@ class BusinessRepository(
             return Result.failure(IllegalStateException("এই মোবাইল নম্বর (${cleanPhone}) দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট নিবন্ধিত রয়েছে!"))
         }
 
+        val resolvedShopId = shopId.ifBlank { "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}" }
         val hashedPin = hashPin(pin)
         val adminId = "admin_${System.currentTimeMillis() % 10000000}_${(100..999).random()}"
         val newAdmin = User(
@@ -403,7 +420,8 @@ class BusinessRepository(
             role = UserRole.ADMIN,
             pinHash = hashedPin,
             isActive = true,
-            accountStatus = UserAccountStatus.ACTIVE
+            accountStatus = UserAccountStatus.ACTIVE,
+            shopId = resolvedShopId
         )
 
         val fullAddress = if (district.isNotBlank()) {
@@ -733,15 +751,50 @@ class BusinessRepository(
 
     suspend fun saveUser(user: User, adminUser: User) {
         if (adminUser.role != UserRole.ADMIN) throw IllegalStateException("অননুমোদিত অ্যাক্সেস!")
-        db.userDao().insertUser(user)
+        val resolvedShopId = if (user.shopId.isNotBlank()) user.shopId else adminUser.shopId
+        val userToSave = user.copy(shopId = resolvedShopId)
+        db.userDao().insertUser(userToSave)
         db.auditLogDao().insertAuditLog(
             AuditLog(
                 userId = adminUser.id,
                 userName = adminUser.name,
                 action = "ব্যবহারকারী তৈরি/আপডেট",
-                details = "নাম: ${user.name}, পদবী: ${user.role}, স্ট্যাটাস: ${user.accountStatus}"
+                details = "নাম: ${userToSave.name}, পদবী: ${userToSave.role}, স্ট্যাটাস: ${userToSave.accountStatus}, শপ: $resolvedShopId"
             )
         )
+    }
+
+    fun getUsersByShopFlow(shopId: String): Flow<List<User>> {
+        return db.userDao().getUsersByShop(shopId)
+    }
+
+    suspend fun getUserByShopAndPhone(shopId: String, phone: String): User? {
+        return db.userDao().getUserByShopAndPhone(shopId, phone.trim())
+    }
+
+    suspend fun resetStaffPin(targetUserId: String, shopId: String, newPin: String, adminUser: User): Result<Unit> {
+        if (adminUser.role != UserRole.ADMIN) {
+            return Result.failure(IllegalStateException("অননুমোদিত অ্যাক্সেস! শুধুমাত্র অ্যাডমিন স্টাফের পিন রিসেট করতে পারেন।"))
+        }
+        val target = db.userDao().getUserById(targetUserId)
+            ?: return Result.failure(IllegalArgumentException("স্টাফ অ্যাকাউন্ট পাওয়া যায়নি!"))
+        if (adminUser.shopId.isNotBlank() && target.shopId.isNotBlank() && adminUser.shopId != target.shopId) {
+            return Result.failure(IllegalStateException("অননুমোদিত অ্যাক্সেস! অন্য দোকানের স্টাফের তথ্য পরিবর্তন সম্ভব নয়।"))
+        }
+        if (newPin.trim().length < 4 || newPin.trim().length > 6) {
+            return Result.failure(IllegalArgumentException("পিন কোড ৪ থেকে ৬ সংখ্যার হতে হবে!"))
+        }
+        val newHash = hashPin(newPin.trim())
+        db.userDao().resetStaffPin(targetUserId, newHash)
+        db.auditLogDao().insertAuditLog(
+            AuditLog(
+                userId = adminUser.id,
+                userName = adminUser.name,
+                action = "স্টাফ পিন কোড রিসেট",
+                details = "স্টাফ: ${target.name} (${target.phone}), পদবী: ${target.role} এর পিন কোড অ্যাডমিন কর্তৃক রিসেট করা হয়েছে।"
+            )
+        )
+        return Result.success(Unit)
     }
 
     suspend fun isDefaultAdminCredentialsActive(): Boolean {
@@ -757,16 +810,11 @@ class BusinessRepository(
     }
 
     fun isAuthorizedAdminEmail(email: String): Boolean {
-        val clean = email.trim().lowercase()
-        return clean == "buddavaibinodon@gmail.com" ||
-               clean == "ataursek9@gmail.com" || clean == "ataurgonee4@gmail.com" ||
-               clean == "support@smartbiz.local" || clean == "gonee8666@gmail.com" ||
-               clean == "ataulgonee786@gmail.com" || clean == "ataurpos@gmail.com" ||
-               clean == "ataur50305@gmail.com" || clean == "a48268993@gmail.com"
+        return SuperAdminRepository.isSuperAdminEmail(email)
     }
 
     fun isAuthorizedSuperAdminEmail(email: String): Boolean {
-        return isAuthorizedAdminEmail(email)
+        return SuperAdminRepository.isSuperAdminEmail(email)
     }
 
     suspend fun updateAdminSecurityCredentials(

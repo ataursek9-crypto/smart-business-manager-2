@@ -35,6 +35,7 @@ class SuperAdminSystemTest {
         Dispatchers.setMain(testDispatcher)
         app = ApplicationProvider.getApplicationContext()
         repository = SuperAdminRepository(app)
+        repository.resetStateForTesting()
         viewModel = SuperAdminViewModel(app, repository)
     }
 
@@ -217,5 +218,99 @@ class SuperAdminSystemTest {
         assertEquals("01999887766", repository.settings.value.bKashMerchantNumber)
         val logs = repository.auditLogs.value
         assertTrue(logs.any { it.action == "সিস্টেম সেটিংস পরিবর্তন" })
+    }
+
+    @Test
+    fun `test jamesfashion792 is recognized as authorized super admin`() {
+        assertTrue(SuperAdminRepository.isSuperAdminEmail("jamesfashion792@gmail.com"))
+    }
+
+    @Test
+    fun `test new shop registration defaults to free policy and appears in super admin repository`() = runTest(testDispatcher) {
+        val newShop = PlatformBusiness(
+            id = "biz_test_reg_${System.currentTimeMillis()}",
+            businessName = "মেসার্স ভাই ভাই এন্টারপ্রাইজ",
+            ownerUid = "owner_test_101",
+            ownerName = "মোঃ সোহেল রানা",
+            ownerPhone = "01888999000",
+            status = BusinessAccountStatus.ACTIVE,
+            planId = "plan_free",
+            planName = "সম্পূর্ণ ফ্রি ব্যবহার",
+            subscriptionStatus = SubscriptionStatus.ACTIVE,
+            subscriptionExpiresAt = 0L,
+            isAutoExpiryDisabled = true,
+            businessType = "মুদি ও জেনারেল স্টোর",
+            address = "মিরপুর ১০, ঢাকা",
+            district = "ঢাকা",
+            phoneVerified = true
+        )
+
+        val regResult = repository.registerNewShop(newShop)
+        assertTrue(regResult.isSuccess)
+
+        // Verify shop is in businesses list immediately
+        val found = repository.businesses.value.find { it.id == newShop.id }
+        assertNotNull(found)
+        assertEquals("মেসার্স ভাই ভাই এন্টারপ্রাইজ", found?.businessName)
+        assertEquals(BusinessAccountStatus.ACTIVE, found?.status)
+        assertEquals(SubscriptionStatus.ACTIVE, found?.subscriptionStatus)
+        assertTrue(found?.isAutoExpiryDisabled == true)
+        assertEquals(0L, found?.subscriptionExpiresAt)
+        assertTrue(found?.phoneVerified == true)
+
+        // Verify audit log
+        val logs = repository.auditLogs.value
+        assertTrue(logs.any { it.targetBusinessId == newShop.id && it.action.contains("রেজিস্ট্রেশন") })
+    }
+
+    @Test
+    fun `test sending subscription notice preserves free access and records proposal`() = runTest(testDispatcher) {
+        val target = repository.businesses.value.first()
+        val noticeFee = 600.0
+        val startDate = System.currentTimeMillis() + (30L * 24 * 60 * 60 * 1000)
+        val reminderDate = System.currentTimeMillis() + (15L * 24 * 60 * 60 * 1000)
+
+        val res = repository.sendSubscriptionNotice(
+            businessId = target.id,
+            proposedFee = noticeFee,
+            proposedStartDate = startDate,
+            reminderDate = reminderDate,
+            note = "ভবিষ্যতের প্রো প্যাকেজ প্রস্তাবনা",
+            actorUid = "super_admin_test",
+            actorName = "সুপার এডমিন",
+            actorEmail = "buddavaibinodon@gmail.com"
+        )
+        assertTrue(res.isSuccess)
+
+        val updated = repository.businesses.value.first { it.id == target.id }
+        assertTrue(updated.hasActiveNotice)
+        assertEquals(600.0, updated.proposedFee, 0.01)
+        assertEquals(startDate, updated.proposedStartDate)
+        // Store status must still be ACTIVE, not blocked
+        assertEquals(BusinessAccountStatus.ACTIVE, updated.status)
+    }
+
+    @Test
+    fun `test scheduling future policy change updates business and records audit log`() = runTest(testDispatcher) {
+        val target = repository.businesses.value.first()
+        val effectiveDate = System.currentTimeMillis() + (45L * 24 * 60 * 60 * 1000)
+        val policyDesc = "প্রিমিয়াম সাবস্ক্রিপশন ফিচার কার্যকর"
+
+        val res = repository.schedulePolicyChange(
+            businessId = target.id,
+            policyDescription = policyDesc,
+            effectiveDate = effectiveDate,
+            actorUid = "super_admin_test",
+            actorName = "সুপার এডমিন",
+            actorEmail = "buddavaibinodon@gmail.com"
+        )
+        assertTrue(res.isSuccess)
+
+        val updated = repository.businesses.value.first { it.id == target.id }
+        assertEquals(policyDesc, updated.scheduledPolicyChange)
+        assertEquals(effectiveDate, updated.scheduledPolicyEffectiveAt)
+
+        val logs = repository.auditLogs.value
+        assertTrue(logs.any { it.targetBusinessId == target.id && it.action.contains("পলিসি পরিবর্তন শিডিউল") })
     }
 }

@@ -37,6 +37,27 @@ interface UserDao {
 
     @Query("SELECT COUNT(*) FROM users")
     suspend fun getUserCount(): Int
+
+    @Query("SELECT * FROM users WHERE shopId = :shopId ORDER BY role ASC, name ASC")
+    fun getUsersByShop(shopId: String): Flow<List<User>>
+
+    @Query("SELECT * FROM users WHERE shopId = :shopId AND isActive = 1 AND accountStatus = 'ACTIVE' ORDER BY name ASC")
+    fun getActiveUsersByShop(shopId: String): Flow<List<User>>
+
+    @Query("SELECT * FROM users WHERE shopId = :shopId AND isActive = 1 AND accountStatus = 'ACTIVE'")
+    suspend fun getActiveUsersByShopList(shopId: String): List<User>
+
+    @Query("SELECT * FROM users WHERE shopId = :shopId AND phone = :phone LIMIT 1")
+    suspend fun getUserByShopAndPhone(shopId: String, phone: String): User?
+
+    @Query("SELECT * FROM users WHERE shopId = :shopId AND role = 'ADMIN' LIMIT 1")
+    suspend fun getAdminByShop(shopId: String): User?
+
+    @Query("SELECT COUNT(*) FROM users WHERE shopId = :shopId")
+    suspend fun getUserCountByShop(shopId: String): Int
+
+    @Query("UPDATE users SET pinHash = :newPinHash WHERE id = :userId")
+    suspend fun resetStaffPin(userId: String, newPinHash: String)
 }
 
 @Dao

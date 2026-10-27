@@ -31,7 +31,7 @@ enum class SuperAdminTab {
 
 class SuperAdminViewModel @JvmOverloads constructor(
     application: Application,
-    private val repository: SuperAdminRepository = SuperAdminRepository(application)
+    private val repository: SuperAdminRepository = SuperAdminRepository.getInstance(application)
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -40,7 +40,7 @@ class SuperAdminViewModel @JvmOverloads constructor(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     if (modelClass.isAssignableFrom(SuperAdminViewModel::class.java)) {
-                        return SuperAdminViewModel(application) as T
+                        return SuperAdminViewModel(application, SuperAdminRepository.getInstance(application)) as T
                     }
                     throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
                 }
@@ -255,6 +255,37 @@ class SuperAdminViewModel @JvmOverloads constructor(
                 it.copy(
                     isLoading = false,
                     successMessage = if (res.isSuccess) "'${business.businessName}'-এর জন্য সাবস্ক্রিপশন নোটিশ সফলভাবে প্রেরণ করা হয়েছে।" else null,
+                    errorMessage = res.exceptionOrNull()?.message
+                )
+            }
+        }
+    }
+
+    /**
+     * Schedule a future subscription policy change for a business.
+     */
+    fun schedulePolicyChange(
+        business: PlatformBusiness,
+        policyDescription: String,
+        effectiveDate: Long,
+        actorUid: String,
+        actorName: String,
+        actorEmail: String
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val res = repository.schedulePolicyChange(
+                businessId = business.id,
+                policyDescription = policyDescription,
+                effectiveDate = effectiveDate,
+                actorUid = actorUid,
+                actorName = actorName,
+                actorEmail = actorEmail
+            )
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    successMessage = if (res.isSuccess) "'${business.businessName}'-এর ভবিষ্যৎ পলিসি পরিবর্তন সফলভাবে শিডিউল করা হয়েছে।" else null,
                     errorMessage = res.exceptionOrNull()?.message
                 )
             }

@@ -37,29 +37,230 @@ class SuperAdminRepository(
             "ataulgonee786@gmail.com",
             "ataurpos@gmail.com",
             "ataur50305@gmail.com",
-            "a48268993@gmail.com"
+            "a48268993@gmail.com",
+            "jamesfashion792@gmail.com"
         )
 
         fun isSuperAdminEmail(email: String?): Boolean {
             if (email.isNullOrBlank()) return false
             return AUTHORIZED_SUPER_ADMIN_EMAILS.contains(email.trim().lowercase())
         }
+
+        fun getDefaultPlans(): List<SubscriptionPlan> {
+            return listOf(
+                SubscriptionPlan(
+                    id = "plan_free",
+                    code = "FREE",
+                    name = "Free Perpetual",
+                    nameBn = "সম্পূর্ণ ফ্রি ব্যবহার",
+                    descriptionBn = "নতুন ব্যবসার জন্য আজীবন বিনামূল্যে সকল মৌলিক ফিচার।",
+                    priceMonthly = 0.0,
+                    priceYearly = 0.0,
+                    maxStaff = 2,
+                    maxProducts = 100,
+                    features = listOf(
+                        "বর্তমান পলিসি: সম্পূর্ণ ফ্রি ব্যবহার",
+                        "দৈনিক বেচাকেনা ও রসিদ তৈরি",
+                        "কাস্টমার বাকি হিসাব খাতা",
+                        "মৌলিক লাভ-ক্ষতি প্রতিবেদন",
+                        "১ জন অ্যাডমিন ও ১ জন সেলসম্যান",
+                        "কোনো জোরপূর্বক মেয়াদোত্তীর্ণ বা অটো-পেমেন্ট নেই"
+                    ),
+                    isPopular = false,
+                    isActive = true
+                ),
+                SubscriptionPlan(
+                    id = "plan_basic",
+                    code = "BASIC",
+                    name = "Basic Shop",
+                    nameBn = "বেসিক ব্যবসা",
+                    descriptionBn = "ছোট ও মাঝারি দোকান পরিচালনার জন্য আদর্শ।",
+                    priceMonthly = 500.0,
+                    priceYearly = 5000.0,
+                    maxStaff = 3,
+                    maxProducts = 500,
+                    features = listOf(
+                        "বেসিক সকল ফিচার",
+                        "রিসাইকেল বিন ও ডিলিট হিস্ট্রি",
+                        "কাস্টমার এসএমএস নোটিফিকেশন",
+                        "পিডিএফ রসিদ ও শেয়ারিং",
+                        "সর্বোচ্চ ৩ জন কর্মী"
+                    ),
+                    isPopular = false,
+                    isActive = true
+                ),
+                SubscriptionPlan(
+                    id = "plan_pro",
+                    code = "PRO",
+                    name = "Pro Store",
+                    nameBn = "প্রো স্টোর",
+                    descriptionBn = "দ্রুত বর্ধনশীল শপ ও পাইকারি ব্যবসার জন্য সেরা পছন্দ।",
+                    priceMonthly = 1000.0,
+                    priceYearly = 10000.0,
+                    maxStaff = 8,
+                    maxProducts = 5000,
+                    features = listOf(
+                        "ক্লাউড ব্যাকআপ ও রিয়েলটাইম সিঙ্ক",
+                        "কোম্পানি ক্রয় ও বাকি ব্যবস্থাপনা",
+                        "স্মার্ট রিমাইন্ডার ও বকেয়া অ্যালার্ট",
+                        "স্টক ভেরিফিকেশন ও অডিট লগ",
+                        "সর্বোচ্চ ৮ জন কর্মী"
+                    ),
+                    isPopular = true,
+                    isActive = true
+                ),
+                SubscriptionPlan(
+                    id = "plan_enterprise",
+                    code = "ENTERPRISE",
+                    name = "Enterprise VIP",
+                    nameBn = "এন্টারপ্রাইজ / আনলিমিটেড",
+                    descriptionBn = "বৃহৎ শপিং মল ও চেইন শপের জন্য পূর্ণাঙ্গ সমাধান।",
+                    priceMonthly = 2000.0,
+                    priceYearly = 20000.0,
+                    maxStaff = 100,
+                    maxProducts = 100000,
+                    features = listOf(
+                        "সকল আনলিমিটেড ফিচার",
+                        "AI বিজনেস অ্যাসিস্ট্যান্ট পূর্ণ অ্যাক্সেস",
+                        "অগ্রাধিকারমূলক ভিআইপি সাপোর্ট",
+                        "কাস্টমাইজড রিপোর্ট ও অটো সিঙ্ক"
+                    ),
+                    isPopular = false,
+                    isActive = true
+                )
+            )
+        }
+
+        private val _sharedBusinesses = MutableStateFlow<List<PlatformBusiness>>(emptyList())
+        private val _sharedPlans = MutableStateFlow<List<SubscriptionPlan>>(getDefaultPlans())
+        private val _sharedPayments = MutableStateFlow<List<PlatformPayment>>(emptyList())
+        private val _sharedAuditLogs = MutableStateFlow<List<PlatformAuditLog>>(emptyList())
+        private val _sharedSettings = MutableStateFlow(PlatformSystemSettings())
+
+        @Volatile
+        private var INSTANCE: SuperAdminRepository? = null
+
+        fun getInstance(context: Context): SuperAdminRepository {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SuperAdminRepository(context.applicationContext).also { INSTANCE = it }
+            }
+        }
     }
 
-    private val _businesses = MutableStateFlow<List<PlatformBusiness>>(emptyList())
-    val businesses: StateFlow<List<PlatformBusiness>> = _businesses.asStateFlow()
+    private val _businesses get() = _sharedBusinesses
+    val businesses: StateFlow<List<PlatformBusiness>> = _sharedBusinesses.asStateFlow()
 
-    private val _plans = MutableStateFlow<List<SubscriptionPlan>>(getDefaultPlans())
-    val plans: StateFlow<List<SubscriptionPlan>> = _plans.asStateFlow()
+    private val _plans get() = _sharedPlans
+    val plans: StateFlow<List<SubscriptionPlan>> = _sharedPlans.asStateFlow()
 
-    private val _payments = MutableStateFlow<List<PlatformPayment>>(emptyList())
-    val payments: StateFlow<List<PlatformPayment>> = _payments.asStateFlow()
+    private val _payments get() = _sharedPayments
+    val payments: StateFlow<List<PlatformPayment>> = _sharedPayments.asStateFlow()
 
-    private val _auditLogs = MutableStateFlow<List<PlatformAuditLog>>(emptyList())
-    val auditLogs: StateFlow<List<PlatformAuditLog>> = _auditLogs.asStateFlow()
+    private val _auditLogs get() = _sharedAuditLogs
+    val auditLogs: StateFlow<List<PlatformAuditLog>> = _sharedAuditLogs.asStateFlow()
 
-    private val _settings = MutableStateFlow(PlatformSystemSettings())
-    val settings: StateFlow<PlatformSystemSettings> = _settings.asStateFlow()
+    private val _settings get() = _sharedSettings
+    val settings: StateFlow<PlatformSystemSettings> = _sharedSettings.asStateFlow()
+
+    private fun serializeBusiness(b: PlatformBusiness): org.json.JSONObject {
+        val obj = org.json.JSONObject()
+        obj.put("id", b.id)
+        obj.put("businessName", b.businessName)
+        obj.put("ownerUid", b.ownerUid)
+        obj.put("ownerName", b.ownerName)
+        obj.put("ownerEmail", b.ownerEmail)
+        obj.put("ownerPhone", b.ownerPhone)
+        obj.put("status", b.status.name)
+        obj.put("statusReason", b.statusReason)
+        obj.put("planId", b.planId)
+        obj.put("planName", b.planName)
+        obj.put("subscriptionStatus", b.subscriptionStatus.name)
+        obj.put("subscriptionExpiresAt", b.subscriptionExpiresAt)
+        obj.put("staffCount", b.staffCount)
+        obj.put("maxStaffAllowed", b.maxStaffAllowed)
+        obj.put("createdAt", b.createdAt)
+        obj.put("firstUseAt", b.firstUseAt)
+        obj.put("lastActiveAt", b.lastActiveAt)
+        obj.put("notes", b.notes)
+        obj.put("businessType", b.businessType)
+        obj.put("address", b.address)
+        obj.put("district", b.district)
+        obj.put("isAutoExpiryDisabled", b.isAutoExpiryDisabled)
+        obj.put("activeDaysCount", b.activeDaysCount)
+        obj.put("phoneVerified", b.phoneVerified)
+        obj.put("proposedFee", b.proposedFee)
+        if (b.proposedStartDate != null) obj.put("proposedStartDate", b.proposedStartDate)
+        if (b.noticeReminderDate != null) obj.put("noticeReminderDate", b.noticeReminderDate)
+        obj.put("subscriptionNoticeNote", b.subscriptionNoticeNote)
+        obj.put("hasActiveNotice", b.hasActiveNotice)
+        obj.put("scheduledPolicyChange", b.scheduledPolicyChange)
+        if (b.scheduledPolicyEffectiveAt != null) obj.put("scheduledPolicyEffectiveAt", b.scheduledPolicyEffectiveAt)
+        return obj
+    }
+
+    private fun deserializeBusiness(obj: org.json.JSONObject): PlatformBusiness {
+        return PlatformBusiness(
+            id = obj.optString("id", ""),
+            businessName = obj.optString("businessName", ""),
+            ownerUid = obj.optString("ownerUid", ""),
+            ownerName = obj.optString("ownerName", ""),
+            ownerEmail = obj.optString("ownerEmail", ""),
+            ownerPhone = obj.optString("ownerPhone", ""),
+            status = try { BusinessAccountStatus.valueOf(obj.optString("status", BusinessAccountStatus.ACTIVE.name)) } catch (_: Exception) { BusinessAccountStatus.ACTIVE },
+            statusReason = obj.optString("statusReason", ""),
+            planId = obj.optString("planId", "plan_free"),
+            planName = obj.optString("planName", "সম্পূর্ণ ফ্রি ব্যবহার"),
+            subscriptionStatus = try { SubscriptionStatus.valueOf(obj.optString("subscriptionStatus", SubscriptionStatus.ACTIVE.name)) } catch (_: Exception) { SubscriptionStatus.ACTIVE },
+            subscriptionExpiresAt = obj.optLong("subscriptionExpiresAt", 0L),
+            staffCount = obj.optInt("staffCount", 1),
+            maxStaffAllowed = obj.optInt("maxStaffAllowed", 2),
+            createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+            firstUseAt = obj.optLong("firstUseAt", obj.optLong("createdAt", System.currentTimeMillis())),
+            lastActiveAt = obj.optLong("lastActiveAt", System.currentTimeMillis()),
+            notes = obj.optString("notes", ""),
+            businessType = obj.optString("businessType", "সাধারণ ব্যবসা"),
+            address = obj.optString("address", ""),
+            district = obj.optString("district", ""),
+            isAutoExpiryDisabled = obj.optBoolean("isAutoExpiryDisabled", true),
+            activeDaysCount = obj.optInt("activeDaysCount", 1),
+            phoneVerified = obj.optBoolean("phoneVerified", false),
+            proposedFee = obj.optDouble("proposedFee", 0.0),
+            proposedStartDate = if (obj.has("proposedStartDate") && !obj.isNull("proposedStartDate")) obj.optLong("proposedStartDate") else null,
+            noticeReminderDate = if (obj.has("noticeReminderDate") && !obj.isNull("noticeReminderDate")) obj.optLong("noticeReminderDate") else null,
+            subscriptionNoticeNote = obj.optString("subscriptionNoticeNote", ""),
+            hasActiveNotice = obj.optBoolean("hasActiveNotice", false),
+            scheduledPolicyChange = obj.optString("scheduledPolicyChange", ""),
+            scheduledPolicyEffectiveAt = if (obj.has("scheduledPolicyEffectiveAt") && !obj.isNull("scheduledPolicyEffectiveAt")) obj.optLong("scheduledPolicyEffectiveAt") else null
+        )
+    }
+
+    private fun saveBusinessesLocally(list: List<PlatformBusiness>) {
+        try {
+            val sp = context.getSharedPreferences("super_admin_businesses_store", Context.MODE_PRIVATE)
+            val arr = org.json.JSONArray()
+            list.forEach { b -> arr.put(serializeBusiness(b)) }
+            sp.edit().putString("businesses_json", arr.toString()).apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "saveBusinessesLocally error: ${e.message}")
+        }
+    }
+
+    private fun loadBusinessesLocally(): List<PlatformBusiness> {
+        return try {
+            val sp = context.getSharedPreferences("super_admin_businesses_store", Context.MODE_PRIVATE)
+            val jsonStr = sp.getString("businesses_json", null) ?: return emptyList()
+            val arr = org.json.JSONArray(jsonStr)
+            val result = mutableListOf<PlatformBusiness>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                result.add(deserializeBusiness(obj))
+            }
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "loadBusinessesLocally error: ${e.message}")
+            emptyList()
+        }
+    }
 
     init {
         // Initialize in-memory seed data for offline & initial preview
@@ -77,6 +278,14 @@ class SuperAdminRepository(
     }
 
     private fun seedInitialPlatformData() {
+        if (_businesses.value.isNotEmpty()) return
+
+        val persisted = loadBusinessesLocally()
+        if (persisted.isNotEmpty()) {
+            _businesses.value = persisted
+            return
+        }
+
         val seedBusinesses = listOf(
             PlatformBusiness(
                 id = "biz_smart_store_1",
@@ -190,6 +399,18 @@ class SuperAdminRepository(
             )
         )
         _auditLogs.value = seedLogs
+    }
+
+    @androidx.annotation.VisibleForTesting
+    fun resetStateForTesting() {
+        _sharedBusinesses.value = emptyList()
+        _sharedPayments.value = emptyList()
+        _sharedAuditLogs.value = emptyList()
+        _sharedPlans.value = getDefaultPlans()
+        try {
+            context.getSharedPreferences("super_admin_businesses_store", Context.MODE_PRIVATE).edit().clear().commit()
+        } catch (_: Exception) {}
+        seedInitialPlatformData()
     }
 
     private fun initRemoteListeners() {
@@ -344,91 +565,6 @@ class SuperAdminRepository(
         }
     }
 
-    private fun getDefaultPlans(): List<SubscriptionPlan> {
-        return listOf(
-            SubscriptionPlan(
-                id = "plan_free",
-                code = "FREE",
-                name = "Free Perpetual",
-                nameBn = "সম্পূর্ণ ফ্রি ব্যবহার",
-                descriptionBn = "নতুন ব্যবসার জন্য আজীবন বিনামূল্যে সকল মৌলিক ফিচার।",
-                priceMonthly = 0.0,
-                priceYearly = 0.0,
-                maxStaff = 2,
-                maxProducts = 100,
-                features = listOf(
-                    "বর্তমান পলিসি: সম্পূর্ণ ফ্রি ব্যবহার",
-                    "দৈনিক বেচাকেনা ও রসিদ তৈরি",
-                    "কাস্টমার বাকি হিসাব খাতা",
-                    "মৌলিক লাভ-ক্ষতি প্রতিবেদন",
-                    "১ জন অ্যাডমিন ও ১ জন সেলসম্যান",
-                    "কোনো জোরপূর্বক মেয়াদোত্তীর্ণ বা অটো-পেমেন্ট নেই"
-                ),
-                isPopular = false,
-                isActive = true
-            ),
-            SubscriptionPlan(
-                id = "plan_basic",
-                code = "BASIC",
-                name = "Basic Shop",
-                nameBn = "বেসিক ব্যবসা",
-                descriptionBn = "ছোট ও মাঝারি দোকান পরিচালনার জন্য আদর্শ।",
-                priceMonthly = 500.0,
-                priceYearly = 5000.0,
-                maxStaff = 3,
-                maxProducts = 500,
-                features = listOf(
-                    "বেসিক সকল ফিচার",
-                    "রিসাইকেল বিন ও ডিলিট হিস্ট্রি",
-                    "কাস্টমার এসএমএস নোটিফিকেশন",
-                    "পিডিএফ রসিদ ও শেয়ারিং",
-                    "সর্বোচ্চ ৩ জন কর্মী"
-                ),
-                isPopular = false,
-                isActive = true
-            ),
-            SubscriptionPlan(
-                id = "plan_pro",
-                code = "PRO",
-                name = "Pro Store",
-                nameBn = "প্রো স্টোর",
-                descriptionBn = "দ্রুত বর্ধনশীল শপ ও পাইকারি ব্যবসার জন্য সেরা পছন্দ।",
-                priceMonthly = 1000.0,
-                priceYearly = 10000.0,
-                maxStaff = 8,
-                maxProducts = 5000,
-                features = listOf(
-                    "ক্লাউড ব্যাকআপ ও রিয়েলটাইম সিঙ্ক",
-                    "কোম্পানি ক্রয় ও বাকি ব্যবস্থাপনা",
-                    "স্মার্ট রিমাইন্ডার ও বকেয়া অ্যালার্ট",
-                    "স্টক ভেরিফিকেশন ও অডিট লগ",
-                    "সর্বোচ্চ ৮ জন কর্মী"
-                ),
-                isPopular = true,
-                isActive = true
-            ),
-            SubscriptionPlan(
-                id = "plan_enterprise",
-                code = "ENTERPRISE",
-                name = "Enterprise VIP",
-                nameBn = "এন্টারপ্রাইজ / আনলিমিটেড",
-                descriptionBn = "বৃহৎ শপিং মল ও চেইন শপের জন্য পূর্ণাঙ্গ সমাধান।",
-                priceMonthly = 2000.0,
-                priceYearly = 20000.0,
-                maxStaff = 100,
-                maxProducts = 100000,
-                features = listOf(
-                    "সকল আনলিমিটেড ফিচার",
-                    "AI বিজনেস অ্যাসিস্ট্যান্ট পূর্ণ অ্যাক্সেস",
-                    "অগ্রাধিকারমূলক ভিআইপি সাপোর্ট",
-                    "কাস্টমাইজড রিপোর্ট ও অটো সিঙ্ক"
-                ),
-                isPopular = false,
-                isActive = true
-            )
-        )
-    }
-
     /**
      * Updates business account status (ACTIVE, SUSPENDED, DEACTIVATED).
      * Strictly records an audit log. Never deletes business data upon suspension.
@@ -455,6 +591,7 @@ class SuperAdminRepository(
         )
         currentList[index] = updated
         _businesses.value = currentList
+        saveBusinessesLocally(currentList)
 
         // Record Audit Log
         val actionTitle = when (newStatus) {
@@ -524,6 +661,7 @@ class SuperAdminRepository(
         )
         currentList[index] = updated
         _businesses.value = currentList
+        saveBusinessesLocally(currentList)
 
         recordAuditLog(
             actorUid = actorUid,
@@ -756,13 +894,16 @@ class SuperAdminRepository(
      */
     suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
         val currentList = _businesses.value.toMutableList()
-        val existingIndex = currentList.indexOfFirst { it.id == business.id }
+        val existingIndex = currentList.indexOfFirst {
+            it.id == business.id || (it.ownerPhone == business.ownerPhone && business.ownerPhone.isNotBlank())
+        }
         if (existingIndex >= 0) {
             currentList[existingIndex] = business
         } else {
             currentList.add(0, business)
         }
         _businesses.value = currentList
+        saveBusinessesLocally(currentList)
 
         recordAuditLog(
             actorUid = business.ownerUid,
@@ -792,12 +933,16 @@ class SuperAdminRepository(
                     "staffCount" to business.staffCount,
                     "maxStaffAllowed" to business.maxStaffAllowed,
                     "createdAt" to business.createdAt,
+                    "firstUseAt" to business.firstUseAt,
                     "lastActiveAt" to business.lastActiveAt,
                     "businessType" to business.businessType,
                     "address" to business.address,
                     "district" to business.district,
                     "isAutoExpiryDisabled" to business.isAutoExpiryDisabled,
                     "activeDaysCount" to business.activeDaysCount,
+                    "phoneVerified" to business.phoneVerified,
+                    "scheduledPolicyChange" to business.scheduledPolicyChange,
+                    "scheduledPolicyEffectiveAt" to business.scheduledPolicyEffectiveAt,
                     "notes" to business.notes
                 )
                 FirebaseFirestore.getInstance().collection("businesses").document(business.id)
@@ -840,6 +985,7 @@ class SuperAdminRepository(
         )
         currentList[index] = updated
         _businesses.value = currentList
+        saveBusinessesLocally(currentList)
 
         val startDateStr = if (proposedStartDate != null) {
             java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("bn", "BD")).format(java.util.Date(proposedStartDate))
@@ -874,6 +1020,63 @@ class SuperAdminRepository(
                     ).await()
             } catch (e: Exception) {
                 Log.w(TAG, "sendSubscriptionNotice remote note: ${e.message}")
+            }
+        }
+        return Result.success(Unit)
+    }
+
+    /**
+     * Schedules a future subscription policy change for a business.
+     * Does not revoke or interrupt the store's current active free access.
+     */
+    suspend fun schedulePolicyChange(
+        businessId: String,
+        policyDescription: String,
+        effectiveDate: Long,
+        actorUid: String,
+        actorName: String,
+        actorEmail: String
+    ): Result<Unit> {
+        val currentList = _businesses.value.toMutableList()
+        val index = currentList.indexOfFirst { it.id == businessId }
+        if (index == -1) {
+            return Result.failure(IllegalArgumentException("দোকানটি খুঁজে পাওয়া যায়নি!"))
+        }
+
+        val target = currentList[index]
+        val updated = target.copy(
+            scheduledPolicyChange = policyDescription,
+            scheduledPolicyEffectiveAt = effectiveDate,
+            lastActiveAt = System.currentTimeMillis()
+        )
+        currentList[index] = updated
+        _businesses.value = currentList
+        saveBusinessesLocally(currentList)
+
+        val dateStr = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("bn", "BD")).format(java.util.Date(effectiveDate))
+        recordAuditLog(
+            actorUid = actorUid,
+            actorName = actorName,
+            actorEmail = actorEmail,
+            action = "পলিসি পরিবর্তন শিডিউল",
+            targetBusinessId = businessId,
+            targetBusinessName = target.businessName,
+            details = "দোকান: ${target.businessName}, শিডিউলকৃত পলিসি: '$policyDescription', কার্যকরের তারিখ: $dateStr"
+        )
+
+        if (isFirebaseConfigured()) {
+            try {
+                FirebaseFirestore.getInstance().collection("businesses").document(businessId)
+                    .set(
+                        mapOf(
+                            "scheduledPolicyChange" to policyDescription,
+                            "scheduledPolicyEffectiveAt" to effectiveDate,
+                            "lastActiveAt" to updated.lastActiveAt
+                        ),
+                        SetOptions.merge()
+                    ).await()
+            } catch (e: Exception) {
+                Log.w(TAG, "schedulePolicyChange remote write: ${e.message}")
             }
         }
         return Result.success(Unit)

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.model.*
 import com.example.data.repository.BusinessRepository
+import com.example.data.repository.SuperAdminRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import com.example.util.BengaliVoiceHelper
@@ -412,8 +413,22 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         .map { it ?: CompanySettings() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), CompanySettings())
 
-    val users: StateFlow<List<User>> = repository.users
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val users: StateFlow<List<User>> = combine(
+        repository.users,
+        _activeBusinessId,
+        _currentUser
+    ) { allUsers, activeBizId, currUser ->
+        val effectiveShopId = when {
+            activeBizId.isNotBlank() && activeBizId != "admin_1" && activeBizId != "salesman_1" -> activeBizId
+            currUser != null && currUser.shopId.isNotBlank() -> currUser.shopId
+            else -> ""
+        }
+        if (effectiveShopId.isNotBlank()) {
+            allUsers.filter { it.shopId == effectiveShopId }
+        } else {
+            allUsers.filter { it.shopId == "biz_smart_store_1" || it.shopId.isBlank() }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allSubmissions: StateFlow<List<ProductSubmission>> = repository.allProductSubmissions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -893,14 +908,20 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         _currentUser.value = auth.user
                         CloudBusinessAuth.setStoredRole(getApplication(), UserRole.SALESMAN.name)
                         val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication()) ?: ""
+                        val bizId = when {
+                            auth.user.shopId.isNotBlank() -> auth.user.shopId
+                            existingBizId.isNotBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1" -> existingBizId
+                            else -> "biz_smart_store_1"
+                        }
                         CloudBusinessAuth.setStoredBusinessId(
                             context = getApplication(),
-                            businessId = existingBizId,
+                            businessId = bizId,
                             role = UserRole.SALESMAN.name
                         )
+                        _activeBusinessId.value = bizId
                         val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
-                        if (fUid != null && existingBizId.isNotBlank()) {
-                            syncManager.ensureStaffLinked(existingBizId, fUid, auth.user.phone, auth.user.name, UserRole.SALESMAN.name)
+                        if (fUid != null && bizId.isNotBlank()) {
+                            syncManager.ensureStaffLinked(bizId, fUid, auth.user.phone, auth.user.name, UserRole.SALESMAN.name)
                         }
                         syncManager.startProductsRealtimeListener()
                         triggerSync()
@@ -927,10 +948,11 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     CloudBusinessAuth.setStoredRole(getApplication(), UserRole.ADMIN.name)
                     val existingBizId = CloudBusinessAuth.getStoredBusinessId(getApplication())
                     val fUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
-                    val bizId = if (!existingBizId.isNullOrBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1") {
-                        existingBizId
-                    } else {
-                        fUid ?: ""
+                    val bizId = when {
+                        auth.user.shopId.isNotBlank() -> auth.user.shopId
+                        !existingBizId.isNullOrBlank() && existingBizId != "admin_1" && existingBizId != "salesman_1" -> existingBizId
+                        !fUid.isNullOrBlank() -> fUid
+                        else -> "biz_smart_store_1"
                     }
                     if (bizId.isNotBlank()) {
                         CloudBusinessAuth.setStoredBusinessId(
@@ -970,6 +992,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         district: String,
         businessType: String,
         pin: String,
+        isPhoneVerified: Boolean = false,
         superAdminViewModel: SuperAdminViewModel? = null,
         onResult: (Boolean, String, String?) -> Unit // success, message, shopId
     ) {
@@ -985,14 +1008,19 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     .replace('৩', '3').replace('৪', '4').replace('৫', '5')
                     .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
 
-                // Check duplicate in Super Admin businesses state if available
-                val existingInSuperAdmin = superAdminViewModel?.rawBusinesses?.value?.any {
+                // Check duplicate in Super Admin businesses state
+                val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
+                val existingInSuperAdmin = superAdminRepo.businesses.value.any {
                     it.ownerPhone == normalizedPhone
-                } == true
+                } || (superAdminViewModel?.rawBusinesses?.value?.any { it.ownerPhone == normalizedPhone } == true)
+
                 if (existingInSuperAdmin) {
                     onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
                     return@launch
                 }
+
+                // Generate unique Shop ID for platform and local database isolation
+                val shopId = "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}"
 
                 val repoResult = repository.registerNewShop(
                     shopName = shopName,
@@ -1001,7 +1029,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     address = address,
                     district = district,
                     businessType = businessType,
-                    pin = normalizedPin
+                    pin = normalizedPin,
+                    shopId = shopId
                 )
 
                 if (repoResult.isFailure) {
@@ -1010,9 +1039,6 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 val (newAdmin, _) = repoResult.getOrThrow()
-
-                // Generate unique Business ID for platform
-                val shopId = "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}"
 
                 val platformBiz = PlatformBusiness(
                     id = shopId,
@@ -1033,12 +1059,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     address = address.trim(),
                     district = district.trim(),
                     createdAt = System.currentTimeMillis(),
+                    firstUseAt = System.currentTimeMillis(),
                     lastActiveAt = System.currentTimeMillis(),
+                    phoneVerified = isPhoneVerified,
                     notes = "নতুন দোকানদার স্ব-নিবন্ধন (ডিফল্ট আজীবন ফ্রি)"
                 )
 
                 // Register into SuperAdminRepository
-                val superAdminRepo = SuperAdminRepository(getApplication())
                 superAdminRepo.registerNewShop(platformBiz)
 
                 // Store active business ID & role locally
@@ -1050,6 +1077,11 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 )
                 _activeBusinessId.value = shopId
                 _currentUser.value = newAdmin
+
+                if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                    syncManager.ensureBusinessDocExists(shopId, newAdmin.id)
+                    syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
+                }
 
                 onResult(true, "অভিনন্দন! আপনার দোকান সফলভাবে নিবন্ধিত হয়েছে।", shopId)
             } catch (e: Exception) {
@@ -1862,6 +1894,91 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun createStaffMember(
+        name: String,
+        phone: String,
+        rawPin: String,
+        role: UserRole = UserRole.SALESMAN,
+        canDiscount: Boolean = true,
+        canViewCustomerDue: Boolean = true,
+        canCollectPayment: Boolean = true,
+        canApplyExpense: Boolean = true,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        val current = _currentUser.value ?: return onResult(false, "অনুগ্রহ করে এডমিন হিসেবে লগইন করুন!")
+        if (current.role != UserRole.ADMIN) return onResult(false, "অননুমোদিত অ্যাক্সেস! শুধুমাত্র এডমিন স্টাফ তৈরি করতে পারেন।")
+        val cleanName = name.trim()
+        val cleanPhone = CloudBusinessAuth.normalizePhone(phone.trim())
+        val cleanPin = rawPin.trim()
+
+        if (cleanName.length < 2) return onResult(false, "স্টাফের নাম কমপক্ষে ২ অক্ষরের হতে হবে!")
+        if (cleanPhone.length < 11) return onResult(false, "সঠিক ১১ ডিজিটের মোবাইল নম্বর দিন (যেমন: 01XXXXXXXXX)!")
+        if (cleanPin.length < 4 || cleanPin.length > 6) return onResult(false, "পিন কোড ৪ থেকে ৬ সংখ্যার হতে হবে!")
+
+        viewModelScope.launch {
+            try {
+                val shopId = getActiveBusinessId().ifBlank { current.shopId }
+                val existingInShop = repository.getUserByShopAndPhone(shopId, cleanPhone)
+                if (existingInShop != null) {
+                    onResult(false, "এই দোকানে এই মোবাইল নম্বর ($cleanPhone) দিয়ে ইতিমধ্যে একজন স্টাফ নিবন্ধিত রয়েছেন!")
+                    return@launch
+                }
+
+                val hashed = repository.hashPin(cleanPin)
+                val newUser = User(
+                    id = "staff_${System.currentTimeMillis()}_${(100..999).random()}",
+                    name = cleanName,
+                    phone = cleanPhone,
+                    role = role,
+                    pinHash = hashed,
+                    canDiscount = canDiscount,
+                    canViewCustomerDue = canViewCustomerDue,
+                    canCollectPayment = canCollectPayment,
+                    canApplyExpense = canApplyExpense,
+                    accountStatus = UserAccountStatus.ACTIVE,
+                    shopId = shopId
+                )
+                repository.saveUser(newUser, current)
+                _toastMessage.emit("নতুন ${if (role == UserRole.ADMIN) "এডমিন" else "সেলসম্যান"} সফলভাবে যুক্ত হয়েছে")
+                syncManager.triggerSync()
+                onResult(true, "স্টাফ সফলভাবে যুক্ত হয়েছে!")
+            } catch (e: Exception) {
+                onResult(false, e.localizedMessage ?: "স্টাফ যুক্ত করতে ব্যর্থ হয়েছে!")
+            }
+        }
+    }
+
+    fun resetStaffPin(targetUserId: String, newPin: String, onResult: (Boolean, String) -> Unit) {
+        val current = _currentUser.value ?: return onResult(false, "অনুগ্রহ করে এডমিন হিসেবে লগইন করুন!")
+        if (current.role != UserRole.ADMIN) return onResult(false, "অননুমোদিত অ্যাক্সেস! শুধুমাত্র এডমিন পিন রিসেট করতে পারেন।")
+        viewModelScope.launch {
+            val shopId = getActiveBusinessId().ifBlank { current.shopId }
+            val res = repository.resetStaffPin(targetUserId, shopId, newPin, current)
+            res.onSuccess {
+                _toastMessage.emit("স্টাফের পিন কোড সফলভাবে পরিবর্তন হয়েছে")
+                syncManager.triggerSync()
+                onResult(true, "পিন কোড সফলভাবে পরিবর্তন হয়েছে!")
+            }.onFailure { err ->
+                onResult(false, err.localizedMessage ?: "পিন কোড পরিবর্তন ব্যর্থ হয়েছে!")
+            }
+        }
+    }
+
+    fun updateStaffProfile(targetUser: User, onResult: (Boolean, String) -> Unit) {
+        val current = _currentUser.value ?: return onResult(false, "অনুগ্রহ করে এডমিন হিসেবে লগইন করুন!")
+        if (current.role != UserRole.ADMIN) return onResult(false, "অননুমোদিত অ্যাক্সেস!")
+        viewModelScope.launch {
+            try {
+                repository.saveUser(targetUser, current)
+                _toastMessage.emit("স্টাফের তথ্য আপডেট হয়েছে")
+                syncManager.triggerSync()
+                onResult(true, "স্টাফের তথ্য আপডেট হয়েছে!")
+            } catch (e: Exception) {
+                onResult(false, e.localizedMessage ?: "তথ্য আপডেট ব্যর্থ হয়েছে!")
+            }
+        }
+    }
+
     fun createSalesman(
         name: String,
         phone: String,
@@ -1869,24 +1986,14 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         canDiscount: Boolean,
         onDone: () -> Unit
     ) {
-        val current = _currentUser.value ?: return
-        if (current.role != UserRole.ADMIN) return
-        viewModelScope.launch {
-            val hashed = repository.hashPin(rawPin.trim())
-            val newUser = User(
-                id = "salesman_${System.currentTimeMillis()}",
-                name = name.trim(),
-                phone = phone.trim(),
-                role = UserRole.SALESMAN,
-                pinHash = hashed,
-                canDiscount = canDiscount,
-                accountStatus = UserAccountStatus.ACTIVE
-            )
-            repository.saveUser(newUser, current)
-            _toastMessage.emit("নতুন সেলসম্যান সফলভাবে তৈরি হয়েছে")
-            syncManager.triggerSync()
-            onDone()
-        }
+        createStaffMember(
+            name = name,
+            phone = phone,
+            rawPin = rawPin,
+            role = UserRole.SALESMAN,
+            canDiscount = canDiscount,
+            onResult = { _, _ -> onDone() }
+        )
     }
 
     fun checkDefaultAdminPinStatus() {

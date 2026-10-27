@@ -48,8 +48,8 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    const val APK_SIGNING_SHA1 = "7A:2A:12:6E:35:7C:64:FD:04:1C:AF:42:F4:47:BE:F6:69:6E:56:EB"
-    const val APK_SIGNING_SHA256 = "8D:63:67:62:87:C7:A7:AC:0D:C0:F0:31:86:C8:C1:DF:BC:55:3C:B7:E1:55:6B:CE:60:8C:26:92:42:73:3A:58"
+    const val APK_SIGNING_SHA1 = "3E:97:F3:6A:C6:68:6A:CF:A2:63:A2:E7:9B:F7:38:F9:73:3D:47:01"
+    const val APK_SIGNING_SHA256 = "B2:B8:04:78:24:3F:E5:5B:1C:C7:7F:2D:F9:FF:E7:2C:AE:01:09:C5:74:F4:76:A8:43:54:6A:0D:D4:7A:19:36"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 
@@ -122,11 +122,12 @@ object GoogleSignInHelper {
 
     fun getWebClientId(context: Context): String {
         return try {
-            var resId = context.resources.getIdentifier("default_web_client_id", "string", "com.example")
-            if (resId == 0) {
-                resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+            val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+            if (resId != 0) {
+                context.getString(resId)
+            } else {
+                context.getString(R.string.default_web_client_id)
             }
-            if (resId != 0) context.getString(resId) else DEFAULT_WEB_CLIENT_ID
         } catch (_: Exception) {
             DEFAULT_WEB_CLIENT_ID
         }
@@ -273,6 +274,21 @@ object GoogleSignInHelper {
                 Log.e(TAG, "General Authentication Exception: $exClass: $exMsg", e)
                 onError("সাইন-ইন সম্পন্ন করা যায়নি [$exClass]: $exMsg")
             }
+        }
+    }
+
+    fun getBengaliErrorMessage(e: Throwable): String {
+        return when {
+            e is java.net.UnknownHostException || e is com.google.firebase.FirebaseNetworkException ->
+                "ইন্টারনেট সংযোগে সমস্যা হচ্ছে। আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।"
+            e is java.net.SocketTimeoutException ->
+                "সার্ভার সংযোগ টাইমআউট হয়েছে। দুর্বল ইন্টারনেটের কারণে এই সমস্যা হতে পারে। পুনরায় চেষ্টা করুন।"
+            e is GetCredentialCancellationException || e.message?.contains("cancel", ignoreCase = true) == true ->
+                "গুগল সাইন-ইন বাতিল করা হয়েছে।"
+            e is NoCredentialException ->
+                "ডিভাইসে কোনো গুগল একাউন্ট পাওয়া যায়নি।"
+            else ->
+                "গুগল সাইন-ইন প্রক্রিয়ায় ত্রুটি ঘটেছে: ${e.localizedMessage ?: e.message ?: "অজানা ত্রুটি"}"
         }
     }
 }

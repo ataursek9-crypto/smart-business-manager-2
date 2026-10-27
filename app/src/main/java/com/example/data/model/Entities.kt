@@ -28,7 +28,8 @@ data class User(
     val canViewCustomerDue: Boolean = true,
     val canCollectPayment: Boolean = true,
     val canApplyExpense: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val shopId: String = "" // Explicit shopId association
 )
 
 @Entity(tableName = "products")

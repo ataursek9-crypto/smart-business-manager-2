@@ -34,7 +34,8 @@ service cloud.firestore {
           'ataulgonee786@gmail.com',
           'ataurpos@gmail.com',
           'ataur50305@gmail.com',
-          'a48268993@gmail.com'
+          'a48268993@gmail.com',
+          'jamesfashion792@gmail.com'
         ];
     }
 

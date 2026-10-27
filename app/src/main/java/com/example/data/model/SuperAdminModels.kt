@@ -55,6 +55,7 @@ data class PlatformBusiness(
     val staffCount: Int = 1,
     val maxStaffAllowed: Int = 2,
     val createdAt: Long = System.currentTimeMillis(),
+    val firstUseAt: Long = createdAt,
     val lastActiveAt: Long = System.currentTimeMillis(),
     val notes: String = "",
     // Extended shop registration & platform management fields
@@ -63,12 +64,16 @@ data class PlatformBusiness(
     val district: String = "",
     val isAutoExpiryDisabled: Boolean = true, // Default Free Policy: Automatic expiry strictly disabled
     val activeDaysCount: Int = 1,
+    val phoneVerified: Boolean = false,
     // Subscription Fee Proposal / Notice from Super Admin
     val proposedFee: Double = 0.0,
     val proposedStartDate: Long? = null,
     val noticeReminderDate: Long? = null,
     val subscriptionNoticeNote: String = "",
-    val hasActiveNotice: Boolean = false
+    val hasActiveNotice: Boolean = false,
+    // Scheduled Future Policy Changes
+    val scheduledPolicyChange: String = "",
+    val scheduledPolicyEffectiveAt: Long? = null
 ) {
     val elapsedDays: Long
         get() = ((System.currentTimeMillis() - createdAt) / (24L * 60 * 60 * 1000)).coerceAtLeast(0L)
