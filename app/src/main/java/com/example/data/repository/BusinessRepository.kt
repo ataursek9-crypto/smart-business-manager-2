@@ -404,15 +404,18 @@ class BusinessRepository(
             return Result.failure(IllegalArgumentException("পিন কোড ৪ থেকে ৬ সংখ্যার হতে হবে!"))
         }
 
+        val resolvedShopId = shopId.ifBlank { "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}" }
+
         // Check duplicate phone in local DB
         val existing = db.userDao().getUserByPhone(cleanPhone)
         if (existing != null) {
-            return Result.failure(IllegalStateException("এই মোবাইল নম্বর (${cleanPhone}) দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট নিবন্ধিত রয়েছে!"))
+            if (existing.role != UserRole.ADMIN || (existing.shopId.isNotBlank() && existing.shopId != resolvedShopId)) {
+                return Result.failure(IllegalStateException("এই মোবাইল নম্বর (${cleanPhone}) দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট নিবন্ধিত রয়েছে!"))
+            }
         }
 
-        val resolvedShopId = shopId.ifBlank { "biz_${System.currentTimeMillis() % 10000000}_${(1000..9999).random()}" }
         val hashedPin = hashPin(pin)
-        val adminId = "admin_${System.currentTimeMillis() % 10000000}_${(100..999).random()}"
+        val adminId = existing?.id ?: "admin_${System.currentTimeMillis() % 10000000}_${(100..999).random()}"
         val newAdmin = User(
             id = adminId,
             name = cleanOwnerName,
@@ -425,7 +428,9 @@ class BusinessRepository(
         )
 
         val fullAddress = if (district.isNotBlank()) {
-            if (address.isNotBlank()) "${address.trim()}, $district" else district.trim()
+            if (address.isNotBlank()) {
+                if (address.contains(district)) address.trim() else "${address.trim()}, $district"
+            } else district.trim()
         } else {
             address.trim()
         }

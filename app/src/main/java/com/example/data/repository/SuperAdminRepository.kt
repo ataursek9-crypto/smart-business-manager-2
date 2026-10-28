@@ -467,32 +467,47 @@ class SuperAdminRepository(
     fun parseBusinessDoc(doc: com.google.firebase.firestore.DocumentSnapshot): PlatformBusiness? {
         return try {
             val id = doc.id
-            val name = doc.getString("name") ?: doc.getString("businessName") ?: "ব্যবসা #$id"
-            val ownerUid = doc.getString("ownerUid") ?: id
-            val ownerName = doc.getString("ownerName") ?: "অ্যাডমিন"
-            val ownerEmail = doc.getString("ownerEmail") ?: ""
-            val ownerPhone = doc.getString("ownerPhone") ?: doc.getString("phone") ?: ""
+            val name = doc.getString("businessName")
+                ?: doc.getString("name")
+                ?: doc.getString("shopName")
+                ?: "ব্যবসা #$id"
+            val ownerUid = doc.getString("ownerUid") ?: doc.getString("uid") ?: id
+            val ownerName = doc.getString("ownerName") ?: doc.getString("name") ?: "অ্যাডমিন"
+            val ownerEmail = doc.getString("ownerEmail") ?: doc.getString("email") ?: ""
+            val ownerPhone = doc.getString("phone") ?: doc.getString("ownerPhone") ?: ""
             val statusStr = doc.getString("status") ?: "ACTIVE"
             val status = try { BusinessAccountStatus.valueOf(statusStr) } catch (_: Exception) { BusinessAccountStatus.ACTIVE }
             val planId = doc.getString("planId") ?: "plan_free"
             val planName = doc.getString("planName") ?: "সম্পূর্ণ ফ্রি ব্যবহার"
             val subStatusStr = doc.getString("subscriptionStatus") ?: "ACTIVE"
             val subStatus = try { SubscriptionStatus.valueOf(subStatusStr) } catch (_: Exception) { SubscriptionStatus.ACTIVE }
-            val expiresAt = doc.getLong("subscriptionExpiresAt") ?: 0L
-            val staffCount = (doc.getLong("staffCount") ?: 1).toInt()
-            val maxStaff = (doc.getLong("maxStaffAllowed") ?: 5).toInt()
-            val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-            val lastActiveAt = doc.getLong("lastActiveAt") ?: System.currentTimeMillis()
+
+            val expiresAt = (doc.get("subscriptionExpiresAt") as? Number)?.toLong()
+                ?: (doc.get("subscriptionExpiresAt") as? com.google.firebase.Timestamp)?.toDate()?.time
+                ?: 0L
+            val staffCount = (doc.get("staffCount") as? Number)?.toInt() ?: 1
+            val maxStaff = (doc.get("maxStaffAllowed") as? Number)?.toInt() ?: 2
+            val createdAt = (doc.get("createdAt") as? Number)?.toLong()
+                ?: (doc.get("createdAt") as? com.google.firebase.Timestamp)?.toDate()?.time
+                ?: System.currentTimeMillis()
+            val lastActiveAt = (doc.get("lastActiveAt") as? Number)?.toLong()
+                ?: (doc.get("lastActiveAt") as? com.google.firebase.Timestamp)?.toDate()?.time
+                ?: System.currentTimeMillis()
             val businessType = doc.getString("businessType") ?: "সাধারণ ব্যবসা"
             val address = doc.getString("address") ?: ""
             val district = doc.getString("district") ?: ""
             val isAutoExpiryDisabled = doc.getBoolean("isAutoExpiryDisabled") ?: true
-            val activeDaysCount = (doc.getLong("activeDaysCount") ?: 1).toInt()
-            val proposedFee = doc.getDouble("proposedFee") ?: 0.0
-            val proposedStartDate = doc.getLong("proposedStartDate")
-            val noticeReminderDate = doc.getLong("noticeReminderDate")
+            val activeDaysCount = (doc.get("activeDaysCount") as? Number)?.toInt() ?: 1
+            val proposedFee = (doc.get("proposedFee") as? Number)?.toDouble() ?: 0.0
+            val proposedStartDate = (doc.get("proposedStartDate") as? Number)?.toLong()
+                ?: (doc.get("proposedStartDate") as? com.google.firebase.Timestamp)?.toDate()?.time
+            val noticeReminderDate = (doc.get("noticeReminderDate") as? Number)?.toLong()
+                ?: (doc.get("noticeReminderDate") as? com.google.firebase.Timestamp)?.toDate()?.time
             val subscriptionNoticeNote = doc.getString("subscriptionNoticeNote") ?: ""
             val hasActiveNotice = doc.getBoolean("hasActiveNotice") ?: (proposedFee > 0.0)
+            val scheduledPolicyChange = doc.getString("scheduledPolicyChange") ?: ""
+            val scheduledPolicyEffectiveAt = (doc.get("scheduledPolicyEffectiveAt") as? Number)?.toLong()
+                ?: (doc.get("scheduledPolicyEffectiveAt") as? com.google.firebase.Timestamp)?.toDate()?.time
 
             PlatformBusiness(
                 id = id,
@@ -517,21 +532,21 @@ class SuperAdminRepository(
                 district = district,
                 isAutoExpiryDisabled = isAutoExpiryDisabled,
                 activeDaysCount = activeDaysCount,
+                phoneVerified = doc.getBoolean("phoneVerified") ?: false,
                 proposedFee = proposedFee,
                 proposedStartDate = proposedStartDate,
                 noticeReminderDate = noticeReminderDate,
                 subscriptionNoticeNote = subscriptionNoticeNote,
-                hasActiveNotice = hasActiveNotice
+                hasActiveNotice = hasActiveNotice,
+                scheduledPolicyChange = scheduledPolicyChange,
+                scheduledPolicyEffectiveAt = scheduledPolicyEffectiveAt
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "parseBusinessDoc error on doc ${doc.id}: ${e.message}")
             null
         }
     }
 
-    /**
-     * Actively fetches all registered shops from Cloud Firestore backend.
-     * Merges remote businesses with existing and updates local persistence.
-     */
     /**
      * Actively fetches all registered shops from Cloud Firestore backend.
      * Merges remote businesses with existing and updates local persistence.
@@ -568,7 +583,9 @@ class SuperAdminRepository(
                 current.removeAll { it.id == "biz_fashion_house_2" || it.id == "biz_dhaka_traders_3" }
                 remoteList.forEach { remote ->
                     val idx = current.indexOfFirst {
-                        it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
+                        it.id == remote.id ||
+                        (it.ownerUid.isNotBlank() && it.ownerUid == remote.ownerUid) ||
+                        (it.ownerPhone.isNotBlank() && it.ownerPhone == remote.ownerPhone)
                     }
                     if (idx >= 0) {
                         current[idx] = remote
@@ -1091,9 +1108,9 @@ class SuperAdminRepository(
 
         // 1. Check in-memory state
         val localMatch = _businesses.value.firstOrNull {
-            (cleanUid.isNotBlank() && it.ownerUid == cleanUid) ||
+            (cleanUid.isNotBlank() && (it.id == cleanUid || it.ownerUid == cleanUid)) ||
             (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true)) ||
-            (cleanPhone.isNotBlank() && it.ownerPhone == cleanPhone)
+            (cleanPhone.isNotBlank() && (it.ownerPhone == cleanPhone || it.ownerPhone.endsWith(cleanPhone.takeLast(10))))
         }
         if (localMatch != null) return localMatch
 
@@ -1102,6 +1119,17 @@ class SuperAdminRepository(
             try {
                 val firestore = FirebaseFirestore.getInstance()
                 if (cleanUid.isNotBlank()) {
+                    // Direct lookup by document ID (supports UID-keyed business docs like PBknnhTZ1LNZsNBb9dpAOInpRmt1)
+                    try {
+                        val directDoc = firestore.collection("businesses").document(cleanUid).get().await()
+                        if (directDoc.exists()) {
+                            val parsed = parseBusinessDoc(directDoc)
+                            if (parsed != null) return parsed
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "findBusinessByOwner direct doc lookup note: ${e.message}")
+                    }
+
                     val querySnap = firestore.collection("businesses")
                         .whereEqualTo("ownerUid", cleanUid)
                         .limit(1)
@@ -1186,8 +1214,9 @@ class SuperAdminRepository(
                     "staffCount" to business.staffCount,
                     "maxStaffAllowed" to business.maxStaffAllowed,
                     "createdAt" to business.createdAt,
+                    "updatedAt" to System.currentTimeMillis(),
                     "firstUseAt" to business.firstUseAt,
-                    "lastActiveAt" to business.lastActiveAt,
+                    "lastActiveAt" to System.currentTimeMillis(),
                     "businessType" to business.businessType,
                     "address" to business.address,
                     "district" to business.district,
@@ -1195,13 +1224,14 @@ class SuperAdminRepository(
                     "activeDaysCount" to business.activeDaysCount,
                     "phoneVerified" to business.phoneVerified,
                     "scheduledPolicyChange" to business.scheduledPolicyChange,
-                    "notes" to business.notes
+                    "notes" to business.notes,
+                    "proposedFee" to 0.0
                 )
                 if (business.scheduledPolicyEffectiveAt != null) {
                     data["scheduledPolicyEffectiveAt"] = business.scheduledPolicyEffectiveAt
                 }
 
-                val writeSuccess = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                val writeSuccess = kotlinx.coroutines.withTimeoutOrNull(20000L) {
                     firestore.collection("businesses").document(business.id)
                         .set(data, SetOptions.merge()).await()
 
@@ -1213,7 +1243,8 @@ class SuperAdminRepository(
                             "businessName" to business.businessName,
                             "ownerName" to business.ownerName,
                             "ownerUid" to business.ownerUid,
-                            "createdAt" to business.createdAt
+                            "createdAt" to business.createdAt,
+                            "updatedAt" to System.currentTimeMillis()
                         )
                         try {
                             firestore.collection("registered_phones").document(cleanPhone)
@@ -1238,7 +1269,9 @@ class SuperAdminRepository(
         // Successfully written to server or server not configured -> update local memory and cache
         val currentList = _businesses.value.toMutableList()
         val existingIndex = currentList.indexOfFirst {
-            it.id == business.id || (it.ownerPhone == business.ownerPhone && business.ownerPhone.isNotBlank())
+            it.id == business.id ||
+            (it.ownerUid.isNotBlank() && it.ownerUid == business.ownerUid) ||
+            (it.ownerPhone == business.ownerPhone && business.ownerPhone.isNotBlank())
         }
         if (existingIndex >= 0) {
             currentList[existingIndex] = business

@@ -1099,11 +1099,15 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     .replace('৩', '3').replace('৪', '4').replace('৫', '5')
                     .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
 
+                val currentAuth = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val effectiveOwnerUid = if (ownerUid.isNotBlank()) ownerUid else (currentAuth?.uid ?: "")
+                val effectiveEmail = if (ownerEmail.isNotBlank()) ownerEmail else (currentAuth?.email ?: "")
+
                 // Check duplicate in Super Admin businesses state and Cloud Firestore
                 val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
                 val existingInSuperAdmin = superAdminRepo.businesses.value.any {
-                    it.ownerPhone == normalizedPhone
-                } || (superAdminViewModel?.rawBusinesses?.value?.any { it.ownerPhone == normalizedPhone } == true)
+                    it.ownerPhone == normalizedPhone && it.id != effectiveOwnerUid && it.ownerUid != effectiveOwnerUid
+                } || (superAdminViewModel?.rawBusinesses?.value?.any { it.ownerPhone == normalizedPhone && it.id != effectiveOwnerUid && it.ownerUid != effectiveOwnerUid } == true)
 
                 if (existingInSuperAdmin) {
                     onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", null)
@@ -1113,26 +1117,44 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 if (superAdminRepo.isFirebaseConfigured()) {
                     val isAlreadyRegistered = superAdminRepo.checkPhoneRegisteredRemote(normalizedPhone)
                     if (isAlreadyRegistered) {
-                        onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", null)
-                        return@launch
+                        // Check if registered to the same owner
+                        val registeredMatch = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail, normalizedPhone)
+                        if (registeredMatch == null || (registeredMatch.ownerUid.isNotBlank() && registeredMatch.ownerUid != effectiveOwnerUid)) {
+                            onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", null)
+                            return@launch
+                        }
                     }
                 }
 
-                // Check if current authenticated user (Google or Phone) already owns a business
-                val currentAuth = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-                val effectiveOwnerUid = if (ownerUid.isNotBlank()) ownerUid else (currentAuth?.uid ?: "")
-                val effectiveEmail = if (ownerEmail.isNotBlank()) ownerEmail else (currentAuth?.email ?: "")
-
+                // Check if current authenticated user (Google or Phone) already owns a completed business
+                var existingBiz: PlatformBusiness? = null
                 if (effectiveOwnerUid.isNotBlank() || effectiveEmail.isNotBlank() || normalizedPhone.isNotBlank()) {
-                    val existingBiz = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail, normalizedPhone)
+                    existingBiz = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail, normalizedPhone)
                     if (existingBiz != null) {
-                        onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", existingBiz.id)
-                        return@launch
+                        val isStub = existingBiz.ownerPhone.isBlank() || existingBiz.address.isBlank()
+                        val isFullyRegistered = !isStub
+
+                        if (isFullyRegistered) {
+                            onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", existingBiz.id)
+                            return@launch
+                        }
                     }
                 }
 
-                // Generate unique Shop ID for platform and local database isolation
-                val shopId = "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
+                // Reuse existing shop ID if already created as a stub doc (e.g. PBknnhTZ1LNZsNBb9dpAOInpRmt1), else generate shop ID
+                val shopId = when {
+                    existingBiz != null && existingBiz.id.isNotBlank() -> existingBiz.id
+                    effectiveOwnerUid.isNotBlank() && superAdminRepo.isFirebaseConfigured() -> {
+                        try {
+                            val directDoc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                .collection("businesses").document(effectiveOwnerUid).get().await()
+                            if (directDoc.exists()) effectiveOwnerUid else "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
+                        } catch (_: Exception) {
+                            "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
+                        }
+                    }
+                    else -> "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
+                }
 
                 val repoResult = repository.registerNewShop(
                     shopName = shopName,
@@ -1151,11 +1173,12 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 val (newAdmin, _) = repoResult.getOrThrow()
+                val effectiveAuthUid = if (effectiveOwnerUid.isNotBlank()) effectiveOwnerUid else newAdmin.id
 
                 val platformBiz = PlatformBusiness(
                     id = shopId,
                     businessName = shopName.trim(),
-                    ownerUid = if (effectiveOwnerUid.isNotBlank()) effectiveOwnerUid else newAdmin.id,
+                    ownerUid = effectiveAuthUid,
                     ownerName = ownerName.trim(),
                     ownerEmail = effectiveEmail.trim().lowercase(),
                     ownerPhone = normalizedPhone,
@@ -1170,8 +1193,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     businessType = businessType.ifBlank { "সাধারণ ব্যবসা" },
                     address = address.trim(),
                     district = district.trim(),
-                    createdAt = System.currentTimeMillis(),
-                    firstUseAt = System.currentTimeMillis(),
+                    createdAt = existingBiz?.createdAt ?: System.currentTimeMillis(),
+                    firstUseAt = existingBiz?.firstUseAt ?: System.currentTimeMillis(),
                     lastActiveAt = System.currentTimeMillis(),
                     phoneVerified = isPhoneVerified,
                     notes = "নতুন দোকানদার স্ব-নিবন্ধন (সুপার এডমিন অনুমোদনের অপেক্ষায়)"
@@ -1187,10 +1210,10 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 // Link Google credentials if provided
-                if (ownerUid.isNotBlank() || ownerEmail.isNotBlank()) {
+                if (effectiveAuthUid.isNotBlank() || ownerEmail.isNotBlank()) {
                     CloudBusinessAuth.setLinkedGoogleAccount(
                         context = getApplication(),
-                        uid = ownerUid,
+                        uid = effectiveAuthUid,
                         email = ownerEmail,
                         userId = newAdmin.id,
                         shopId = shopId
@@ -1217,11 +1240,8 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
 
                 try {
                     if (superAdminRepo.isFirebaseConfigured() || syncManager.isCloudBackendConfigured()) {
-                        syncManager.ensureBusinessDocExists(shopId, newAdmin.id, shopName.trim())
-                        syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
-                        if (effectiveOwnerUid.isNotBlank() && effectiveOwnerUid != newAdmin.id) {
-                            syncManager.ensureStaffLinked(shopId, effectiveOwnerUid, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
-                        }
+                        syncManager.ensureBusinessDocExists(shopId, effectiveAuthUid, shopName.trim())
+                        syncManager.ensureStaffLinked(shopId, effectiveAuthUid, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
                     }
                     superAdminViewModel?.refreshBusinesses()
                 } catch (e: Exception) {

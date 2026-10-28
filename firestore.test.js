@@ -386,3 +386,56 @@ test("11. Super Admin Harmony: Master admin (ataurgonee4@gmail.com) has full acc
   const snapshot = await assertSucceeds(masterAdminDb.collection("businesses").get());
   assert.strictEqual(snapshot.docs.length, 2);
 });
+
+test("12. Initial Shop Completion: Owner CAN complete their stub doc and Attacker is BLOCKED", async () => {
+  const NEW_SHOP_UID = "PBknnhTZ1LNZsNBb9dpAOInpRmt1";
+  // Seed initial minimal stub document as created by initial Google login
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("businesses").doc(NEW_SHOP_UID).set({
+      id: NEW_SHOP_UID,
+      businessName: "নতুন দোকান স্টাব",
+      ownerUid: NEW_SHOP_UID,
+      createdAt: Date.now(),
+    });
+  });
+
+  const shopOwnerDb = testEnv.authenticatedContext(NEW_SHOP_UID, {
+    email: "newshop@example.com",
+    email_verified: true,
+  }).firestore();
+
+  const attackerDb = testEnv.authenticatedContext(ATTACKER_MALLORY_UID, {
+    email: "mallory@attacker.com",
+    email_verified: true,
+  }).firestore();
+
+  // Attacker tries to hijack or update the stub document -> BLOCKED
+  await assertFails(attackerDb.collection("businesses").doc(NEW_SHOP_UID).update({
+    businessName: "হাইজ্যাকড শপ",
+    phone: "01999999999",
+  }));
+
+  // Authorized Shop Owner completes their shop profile with phone, address, and free tier -> SUCCEEDS
+  await assertSucceeds(shopOwnerDb.collection("businesses").doc(NEW_SHOP_UID).set({
+    id: NEW_SHOP_UID,
+    businessName: "স্মার্ট বিজনেস স্টোর",
+    name: "স্মার্ট বিজনেস স্টোর",
+    ownerUid: NEW_SHOP_UID,
+    ownerName: "আতাউর রহমান",
+    ownerPhone: "01812345678",
+    phone: "01812345678",
+    address: "মিরপুর ১০, ঢাকা",
+    status: "PENDING",
+    planId: "plan_free",
+    subscriptionStatus: "TRIAL",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }, { merge: true }));
+
+  // Verify the updated document contains the completed data
+  const updatedDoc = await assertSucceeds(shopOwnerDb.collection("businesses").doc(NEW_SHOP_UID).get());
+  assert.strictEqual(updatedDoc.data().businessName, "স্মার্ট বিজনেস স্টোর");
+  assert.strictEqual(updatedDoc.data().ownerPhone, "01812345678");
+  assert.strictEqual(updatedDoc.data().ownerUid, NEW_SHOP_UID);
+});
+

@@ -386,7 +386,19 @@ class CloudSyncManager(
         try {
             val firestore = FirebaseFirestore.getInstance()
 
-            // 2a. Query by ownerUid
+            // 2a. Check direct document by authUser.uid (e.g. PBknnhTZ1LNZsNBb9dpAOInpRmt1)
+            try {
+                val directDoc = firestore.collection("businesses").document(authUser.uid).get().awaitResult()
+                if (directDoc.exists()) {
+                    val foundBizId = directDoc.id
+                    CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
+                    return foundBizId
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "resolveOrFetchBusinessId direct doc check note: ${e.message}")
+            }
+
+            // 2b. Query by ownerUid
             val uidSnap = firestore.collection("businesses")
                 .whereEqualTo("ownerUid", authUser.uid)
                 .limit(1)
@@ -604,17 +616,20 @@ class CloudSyncManager(
                     "id" to businessId,
                     "ownerUid" to authUid,
                     "businessName" to businessName,
+                    "name" to businessName,
                     "createdAt" to System.currentTimeMillis(),
                     "updatedAt" to System.currentTimeMillis()
                 )
                 bizRef.set(bizData, SetOptions.merge()).awaitResult()
                 Log.i(TAG, "Created root business doc: /businesses/$businessId with owner: $authUid")
             } else {
+                val updates = mutableMapOf<String, Any>("updatedAt" to System.currentTimeMillis())
                 val existingOwner = snapshot.getString("ownerUid")
                 if (existingOwner.isNullOrBlank()) {
-                    bizRef.update("ownerUid", authUid).awaitResult()
+                    updates["ownerUid"] = authUid
                     Log.i(TAG, "Updated root business doc ownerUid on /businesses/$businessId: $authUid")
                 }
+                bizRef.set(updates, SetOptions.merge()).awaitResult()
             }
             // Ensure owner membership index exists
             ensureStaffLinked(businessId, authUid, role = UserRole.ADMIN.name, name = "এডমিন")
