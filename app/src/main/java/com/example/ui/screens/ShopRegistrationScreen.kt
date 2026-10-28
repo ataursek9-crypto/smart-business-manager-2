@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -27,12 +30,18 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.ui.platform.LocalContext
+import com.example.data.model.PlatformBusiness
+import com.example.data.repository.SuperAdminRepository
 import com.example.ui.theme.PrimaryNavy
 import com.example.util.GoogleSignInHelper
+import com.example.util.PhoneAuthHelper
 import com.example.viewmodel.BusinessViewModel
 import com.example.viewmodel.SuperAdminViewModel
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.PhoneAuthProvider
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +53,14 @@ fun ShopRegistrationScreen(
 ) {
     BackHandler { onBack() }
 
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val activity = context as? Activity
+
+    // Registration Mode Tab: 0 = Mobile Phone (SMS OTP), 1 = Google Sign-In
+    var selectedMethodTab by remember { mutableStateOf(0) }
+
+    // Form Fields
     var shopName by remember { mutableStateOf("") }
     var ownerName by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
@@ -55,27 +72,58 @@ fun ShopRegistrationScreen(
     var showPin by remember { mutableStateOf(false) }
     var agreedToTerms by remember { mutableStateOf(true) }
 
-    // Optional OTP Verification Flow
-    var showOtpSection by remember { mutableStateOf(false) }
-    var generatedOtp by remember { mutableStateOf("") }
+    // Phone Authentication (Option A) State
+    var verificationId by remember { mutableStateOf("") }
+    var resendToken by remember { mutableStateOf<PhoneAuthProvider.ForceResendingToken?>(null) }
     var enteredOtp by remember { mutableStateOf("") }
+    var isSendingOtp by remember { mutableStateOf(false) }
+    var isVerifyingOtp by remember { mutableStateOf(false) }
     var isPhoneVerified by remember { mutableStateOf(false) }
-    var otpSentMessage by remember { mutableStateOf("") }
+    var otpCooldownSeconds by remember { mutableStateOf(0) }
+    var authenticatedPhoneUser by remember { mutableStateOf<FirebaseUser?>(null) }
 
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf("") }
-    var successRegisteredShopId by remember { mutableStateOf<String?>(null) }
-
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+    // Google Authentication (Option B) State
     var isGoogleSigningIn by remember { mutableStateOf(false) }
-    var currentGoogleUser by remember {
-        mutableStateOf(try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null })
+    var authenticatedGoogleUser by remember {
+        mutableStateOf(try {
+            val user = FirebaseAuth.getInstance().currentUser
+            if (user != null && !user.email.isNullOrBlank()) user else null
+        } catch (_: Exception) { null })
     }
 
-    LaunchedEffect(currentGoogleUser) {
-        if (ownerName.isBlank() && !currentGoogleUser?.displayName.isNullOrBlank()) {
-            ownerName = currentGoogleUser!!.displayName!!
+    // Existing Shop Detection State
+    var existingShopFound by remember { mutableStateOf<PlatformBusiness?>(null) }
+    var isCheckingExistingShop by remember { mutableStateOf(false) }
+
+    // Overall Loading & Error State
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+    var successMessage by remember { mutableStateOf("") }
+    var successRegisteredShopId by remember { mutableStateOf<String?>(null) }
+
+    // Timer countdown effect for OTP Resend
+    LaunchedEffect(otpCooldownSeconds) {
+        if (otpCooldownSeconds > 0) {
+            delay(1000L)
+            otpCooldownSeconds -= 1
+        }
+    }
+
+    // Auto-fill from Google account if authenticated
+    LaunchedEffect(authenticatedGoogleUser) {
+        val user = authenticatedGoogleUser
+        if (user != null) {
+            if (ownerName.isBlank() && !user.displayName.isNullOrBlank()) {
+                ownerName = user.displayName!!
+            }
+            // Check if this Google user already has a shop
+            coroutineScope.launch {
+                isCheckingExistingShop = true
+                val superAdminRepo = SuperAdminRepository.getInstance(context)
+                val existing = superAdminRepo.findBusinessByOwner(user.uid, user.email ?: "")
+                isCheckingExistingShop = false
+                existingShopFound = existing
+            }
         }
     }
 
@@ -135,25 +183,25 @@ fun ShopRegistrationScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Free Policy Banner Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 540.dp),
+                    .widthIn(max = 560.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(46.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
                             .background(Color(0xFF2E7D32)),
                         contentAlignment = Alignment.Center
@@ -162,123 +210,471 @@ fun ShopRegistrationScreen(
                             imageVector = Icons.Default.CardGiftcard,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "বিনামূল্যে ব্যবহারের স্পষ্ট নীতিমালা",
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1B5E20),
-                            fontSize = 15.sp
+                            fontSize = 14.sp
                         )
                         Text(
-                            text = "কোনো ক্রেডিট কার্ড বা মাসিক ফি ছাড়াই আজীবন বেসিক ফিচার (বেচাকেনা, বাকি খাতা, স্টক, রসিদ) ফ্রি ব্যবহার করতে পারবেন। কোনো জোরপূর্বক মেয়াদোত্তীর্ণ নেই।",
-                            fontSize = 12.sp,
+                            text = "কোনো ক্রেডিট কার্ড বা মাসিক ফি ছাড়াই আজীবন বেসিক ফিচার (বেচাকেনা, বাকি খাতা, স্টক, রসিদ) ফ্রি ব্যবহার করতে পারবেন।",
+                            fontSize = 11.sp,
                             color = Color(0xFF2E7D32),
-                            lineHeight = 16.sp
+                            lineHeight = 15.sp
                         )
                     }
                 }
             }
 
-            if (currentGoogleUser != null && !currentGoogleUser?.email.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Tab Selector: Option A (Phone Auth) vs Option B (Google Auth)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 560.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "নিবন্ধনের পদ্ধতি নির্বাচন করুন:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    PrimaryTabRow(
+                        selectedTabIndex = selectedMethodTab,
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.clip(RoundedCornerShape(10.dp))
+                    ) {
+                        Tab(
+                            selected = selectedMethodTab == 0,
+                            onClick = {
+                                selectedMethodTab = 0
+                                errorMessage = ""
+                            },
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("মোবাইল নম্বর (SMS OTP)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = selectedMethodTab == 1,
+                            onClick = {
+                                selectedMethodTab = 1
+                                errorMessage = ""
+                            },
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    GoogleLogoMini(modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Google অ্যাকাউন্ট", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Option A: Mobile Phone Authentication Card
+            if (selectedMethodTab == 0) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .widthIn(max = 540.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
+                        .widthIn(max = 560.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                    border = BorderStroke(1.dp, Color(0xFFBBF7D0))
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = Color(0xFF2E7D32),
-                            modifier = Modifier.size(28.dp)
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PhoneInTalk, contentDescription = null, tint = Color(0xFF15803D), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "পদ্ধতি ১: মোবাইল নম্বর ও SMS ওটিপি যাচাই",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF15803D)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "আপনার ১১ ডিজিটের বাংলাদেশী মোবাইল নম্বরে Firebase থেকে একটি ৬ সংখ্যার SMS OTP পাঠানো হবে।",
+                            fontSize = 11.sp,
+                            color = Color(0xFF166534)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "সংযুক্ত Google অ্যাকাউন্ট: ${currentGoogleUser?.email}",
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = Color(0xFF1B5E20)
-                            )
-                            Text(
-                                text = "দোকানটি ক্লাউড ডেটাবেস ও সুপার অ্যাডমিন প্যানেলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে।",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontSize = 11.sp,
-                                color = Color(0xFF2E7D32)
-                            )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Phone Input Field
+                        OutlinedTextField(
+                            value = phone,
+                            onValueChange = {
+                                phone = it
+                                errorMessage = ""
+                                if (isPhoneVerified && authenticatedPhoneUser?.phoneNumber != null) {
+                                    // reset if user changes verified phone
+                                    isPhoneVerified = false
+                                    authenticatedPhoneUser = null
+                                }
+                            },
+                            label = { Text("মোবাইল নম্বর (১১ ডিজিট) *") },
+                            placeholder = { Text("017XXXXXXXX") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Phone, contentDescription = null, tint = PrimaryNavy)
+                            },
+                            trailingIcon = {
+                                if (isPhoneVerified) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = "যাচাইকৃত", tint = Color(0xFF16A34A))
+                                }
+                            },
+                            enabled = !isPhoneVerified && !isSendingOtp,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("reg_phone_input")
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Send OTP / Resend Button
+                        if (!isPhoneVerified) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val cleanPhone = phone.trim()
+                                        if (cleanPhone.length < 11) {
+                                            errorMessage = "সঠিক ১১ ডিজিটের মোবাইল নম্বর দিন!"
+                                            return@Button
+                                        }
+                                        if (activity == null) {
+                                            errorMessage = "সিস্টেম ত্রুটি: অ্যাক্টিভিটি পাওয়া যায়নি!"
+                                            return@Button
+                                        }
+                                        isSendingOtp = true
+                                        errorMessage = ""
+                                        successMessage = "SMS OTP পাঠানো হচ্ছে..."
+
+                                        PhoneAuthHelper.sendVerificationCode(
+                                            activity = activity,
+                                            phone = cleanPhone,
+                                            forceResendingToken = resendToken,
+                                            onCodeSent = { vId, token ->
+                                                isSendingOtp = false
+                                                verificationId = vId
+                                                resendToken = token
+                                                otpCooldownSeconds = 60
+                                                successMessage = "আপনার মোবাইল নম্বরে ৬ সংখ্যার ওটিপি (OTP) পাঠানো হয়েছে!"
+                                            },
+                                            onAutoVerified = { user ->
+                                                isSendingOtp = false
+                                                authenticatedPhoneUser = user
+                                                isPhoneVerified = true
+                                                verificationId = ""
+                                                successMessage = "মোবাইল নম্বর সফলভাবে যাচাই হয়েছে!"
+                                                // Check existing business
+                                                coroutineScope.launch {
+                                                    val superAdminRepo = SuperAdminRepository.getInstance(context)
+                                                    existingShopFound = superAdminRepo.findBusinessByOwner(user.uid, "")
+                                                }
+                                            },
+                                            onError = { err ->
+                                                isSendingOtp = false
+                                                errorMessage = err
+                                                successMessage = ""
+                                            }
+                                        )
+                                    },
+                                    enabled = !isSendingOtp && otpCooldownSeconds == 0,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                                    modifier = Modifier.weight(1f).height(44.dp).testTag("reg_send_otp_button")
+                                ) {
+                                    if (isSendingOtp) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            if (verificationId.isNotBlank()) "পুনরায় কোড পাঠান" else "ওটিপি (OTP) পাঠান",
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
+
+                                if (otpCooldownSeconds > 0) {
+                                    Text(
+                                        text = "$otpCooldownSeconds সে.",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF15803D)
+                                    )
+                                }
+                            }
+                        }
+
+                        // In-card Error & Fallback Banner for Phone Auth
+                        if (!isPhoneVerified && errorMessage.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        Icon(
+                                            Icons.Default.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = errorMessage,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                    if (PhoneAuthHelper.isProviderOrSmsRegionDisabledMessage(errorMessage)) {
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Button(
+                                            onClick = {
+                                                selectedMethodTab = 1
+                                                errorMessage = ""
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.fillMaxWidth().height(40.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                GoogleLogoMini(modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Google অ্যাকাউন্ট দিয়ে নিবন্ধন করুন (বিকল্প)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // OTP Code Entry Section
+                        if (verificationId.isNotBlank() && !isPhoneVerified) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Surface(
+                                color = Color.White,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF86EFAC)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "মোবাইলে আসা ৬ সংখ্যার ওটিপি কোড লিখুন:",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF15803D)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedTextField(
+                                            value = enteredOtp,
+                                            onValueChange = {
+                                                enteredOtp = it.filter { c -> c.isDigit() }.take(6)
+                                                errorMessage = ""
+                                            },
+                                            placeholder = { Text("৬ সংখ্যার কোড") },
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            modifier = Modifier.weight(1f).testTag("reg_otp_input")
+                                        )
+                                        Button(
+                                            onClick = {
+                                                if (enteredOtp.length != 6) {
+                                                    errorMessage = "৬ সংখ্যার কোডটি সঠিকভাবে লিখুন!"
+                                                    return@Button
+                                                }
+                                                isVerifyingOtp = true
+                                                errorMessage = ""
+                                                PhoneAuthHelper.verifyCodeAndSignIn(
+                                                    verificationId = verificationId,
+                                                    code = enteredOtp,
+                                                    onSuccess = { user ->
+                                                        isVerifyingOtp = false
+                                                        authenticatedPhoneUser = user
+                                                        isPhoneVerified = true
+                                                        verificationId = ""
+                                                        successMessage = "মোবাইল নম্বর সফলভাবে যাচাই হয়েছে!"
+                                                        // Check if this phone user already has a shop
+                                                        coroutineScope.launch {
+                                                            val superAdminRepo = SuperAdminRepository.getInstance(context)
+                                                            existingShopFound = superAdminRepo.findBusinessByOwner(user.uid, "")
+                                                        }
+                                                    },
+                                                    onError = { err ->
+                                                        isVerifyingOtp = false
+                                                        errorMessage = err
+                                                    }
+                                                )
+                                            },
+                                            enabled = !isVerifyingOtp && enteredOtp.length == 6,
+                                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryNavy),
+                                            modifier = Modifier.height(52.dp).testTag("reg_verify_otp_button")
+                                        ) {
+                                            if (isVerifyingOtp) {
+                                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                            } else {
+                                                Text("যাচাই করুন", fontSize = 13.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Verified Status Badge
+                        if (isPhoneVerified) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = Color(0xFFDCFCE7),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = Color(0xFF15803D), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "মোবাইল নম্বর সফলভাবে যাচাইকৃত (Firebase Phone Verified)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF15803D)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             } else {
-                Spacer(modifier = Modifier.height(14.dp))
+                // Option B: Google Sign-In Authentication Card
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .widthIn(max = 540.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+                        .widthIn(max = 560.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                    border = BorderStroke(1.dp, Color(0xFFBFDBFE))
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CloudSync, contentDescription = null, tint = Color(0xFFF57F17), modifier = Modifier.size(22.dp))
+                            GoogleLogoMini(modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "সুপার অ্যাডমিন ও ক্লাউড সিঙ্ক সক্রিয় করুন",
+                                text = "পদ্ধতি ২: Google অ্যাকাউন্ট দিয়ে সরাসরি নিবন্ধন",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = Color(0xFFE65100)
+                                fontSize = 14.sp,
+                                color = Color(0xFF1D4ED8)
                             )
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "ক্লাউড ব্যাকআপ ও সুপার অ্যাডমিন অনুমোদনের জন্য আপনার Google অ্যাকাউন্ট সংযুক্ত করুন।",
+                            text = "আপনার বিশ্বস্ত Google অ্যাকাউন্ট দিয়ে এক ক্লিকে সাইন-ইন করে দোকান নিবন্ধন করুন। ক্লাউড ব্যাকআপ স্বয়ংক্রিয়ভাবে সক্রিয় হবে।",
                             fontSize = 11.sp,
-                            color = Color(0xFF795548),
-                            lineHeight = 15.sp
+                            color = Color(0xFF1E40AF)
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Button(
-                            onClick = {
-                                isGoogleSigningIn = true
-                                GoogleSignInHelper.launchGoogleSignIn(
-                                    context = context,
-                                    scope = coroutineScope,
-                                    onAuthSuccess = { fUser ->
-                                        isGoogleSigningIn = false
-                                        currentGoogleUser = fUser
-                                        if (ownerName.isBlank() && !fUser.displayName.isNullOrBlank()) {
-                                            ownerName = fUser.displayName!!
-                                        }
-                                    },
-                                    onCancelled = { isGoogleSigningIn = false },
-                                    onError = { err ->
-                                        isGoogleSigningIn = false
-                                        errorMessage = "Google সাইন-ইন ত্রুটি: $err"
-                                    }
-                                )
-                            },
-                            enabled = !isGoogleSigningIn,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF374151)),
-                            border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().height(44.dp).testTag("shop_registration_google_signin_button")
-                        ) {
-                            if (isGoogleSigningIn) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = PrimaryNavy)
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    GoogleLogoMini(modifier = Modifier.size(18.dp))
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (authenticatedGoogleUser != null && !authenticatedGoogleUser?.email.isNullOrBlank()) {
+                            Surface(
+                                color = Color(0xFFDCFCE7),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF15803D), modifier = Modifier.size(20.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Google দিয়ে অ্যাকাউন্ট যুক্ত করুন", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF374151))
+                                    Column {
+                                        Text(
+                                            text = "সংযুক্ত Google: ${authenticatedGoogleUser?.email}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF15803D)
+                                        )
+                                        Text(
+                                            text = "মালিকের পরিচয় Firebase UID দ্বারা সুরক্ষিত।",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF166534)
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    isGoogleSigningIn = true
+                                    errorMessage = ""
+                                    successMessage = ""
+                                    GoogleSignInHelper.launchGoogleSignIn(
+                                        context = context,
+                                        scope = coroutineScope,
+                                        onAuthSuccess = { fUser ->
+                                            isGoogleSigningIn = false
+                                            authenticatedGoogleUser = fUser
+                                            if (ownerName.isBlank() && !fUser.displayName.isNullOrBlank()) {
+                                                ownerName = fUser.displayName!!
+                                            }
+                                        },
+                                        onCancelled = { isGoogleSigningIn = false },
+                                        onError = { err ->
+                                            isGoogleSigningIn = false
+                                            errorMessage = "Google সাইন-ইন ত্রুটি: $err"
+                                        }
+                                    )
+                                },
+                                enabled = !isGoogleSigningIn,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF374151)),
+                                border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("shop_registration_google_signin_button")
+                            ) {
+                                if (isGoogleSigningIn) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = PrimaryNavy)
+                                } else {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        GoogleLogoMini(modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text("Google দিয়ে সাইন-ইন করুন", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1F2937))
+                                    }
                                 }
                             }
                         }
@@ -286,23 +682,81 @@ fun ShopRegistrationScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            // Existing Shop Detected Alert (Prevents Overwriting & Duplicate Creation)
+            existingShopFound?.let { existing ->
+                Spacer(modifier = Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 560.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                    border = BorderStroke(1.dp, Color(0xFFFCD34D))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFB45309), modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "ইতিমধ্যে নিবন্ধিত দোকান পাওয়া গেছে!",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFFB45309)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "আপনার এই অ্যাকাউন্টে ইতিমধ্যে '${existing.businessName}' নামের একটি দোকান নিবন্ধিত রয়েছে। একই অ্যাকাউন্টে একাধিক দোকান তৈরির পরিবর্তে আপনি সরাসরি আপনার দোকানে প্রবেশ করতে পারেন।",
+                            fontSize = 12.sp,
+                            color = Color(0xFF92400E),
+                            lineHeight = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                val gUser = authenticatedGoogleUser
+                                if (gUser != null) {
+                                    isLoading = true
+                                    viewModel.handleGoogleSignInSuccess(gUser) { success, msg, _ ->
+                                        isLoading = false
+                                        if (success) {
+                                            onRegistrationSuccess()
+                                        } else {
+                                            errorMessage = msg
+                                        }
+                                    }
+                                } else {
+                                    onRegistrationSuccess()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                            modifier = Modifier.fillMaxWidth().height(44.dp)
+                        ) {
+                            Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("বিদ্যমান দোকানে প্রবেশ করুন", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Main Registration Form Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 540.dp),
+                    .widthIn(max = 560.dp),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(
-                        text = "দোকান ও মালিকের তথ্য",
+                        text = "দোকান ও মালিকের তথ্য পূরণ করুন",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -344,109 +798,28 @@ fun ShopRegistrationScreen(
                             .testTag("reg_owner_name_input")
                     )
 
-                    // 3. Mobile Number
-                    OutlinedTextField(
-                        value = phone,
-                        onValueChange = {
-                            phone = it
-                            errorMessage = ""
-                            isPhoneVerified = false
-                        },
-                        label = { Text("মোবাইল নম্বর (লগইন ইউজারনেম) *") },
-                        placeholder = { Text("01XXXXXXXXX") },
-                        leadingIcon = {
-                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = PrimaryNavy)
-                        },
-                        trailingIcon = {
-                            if (isPhoneVerified) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = "যাচাইকৃত", tint = Color(0xFF2E7D32))
-                            }
-                        },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("reg_phone_input")
-                    )
-
-                    // Optional OTP Verification Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (isPhoneVerified) "✓ মোবাইল নম্বর সফলভাবে যাচাইকৃত" else "মোবাইল নম্বর যাচাই করতে চান? (ঐচ্ছিক)",
-                            fontSize = 12.sp,
-                            color = if (isPhoneVerified) Color(0xFF2E7D32) else MaterialTheme.colorScheme.outline,
-                            fontWeight = if (isPhoneVerified) FontWeight.Bold else FontWeight.Normal
+                    // If Google registration was chosen, provide Phone input for shop contact/login
+                    if (selectedMethodTab == 1) {
+                        OutlinedTextField(
+                            value = phone,
+                            onValueChange = {
+                                phone = it
+                                errorMessage = ""
+                            },
+                            label = { Text("দোকানের মোবাইল নম্বর *") },
+                            placeholder = { Text("01XXXXXXXXX") },
+                            leadingIcon = {
+                                Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = PrimaryNavy)
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("reg_phone_input_google_tab")
                         )
-                        if (!isPhoneVerified) {
-                            TextButton(
-                                onClick = {
-                                    showOtpSection = !showOtpSection
-                                    if (showOtpSection && phone.trim().length >= 11) {
-                                        // Generate easy demo 4-digit code
-                                        val code = (1000..9999).random().toString()
-                                        generatedOtp = code
-                                        otpSentMessage = "যাচাইকরণ টেস্ট কোড: $code (এসএমএস সিমুলেশন)"
-                                    }
-                                }
-                            ) {
-                                Text(if (showOtpSection) "লুকান" else "কোড পাঠান", fontSize = 12.sp)
-                            }
-                        }
                     }
 
-                    // Optional OTP Entry Section
-                    AnimatedVisibility(visible = showOtpSection && !isPhoneVerified) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                if (otpSentMessage.isNotBlank()) {
-                                    Text(
-                                        text = otpSentMessage,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF0277BD)
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedTextField(
-                                        value = enteredOtp,
-                                        onValueChange = { enteredOtp = it.filter { c -> c.isDigit() }.take(4) },
-                                        placeholder = { Text("৪ সংখ্যার কোড") },
-                                        singleLine = true,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Button(
-                                        onClick = {
-                                            if (enteredOtp.isNotBlank() && (enteredOtp == generatedOtp || enteredOtp == "1234")) {
-                                                isPhoneVerified = true
-                                                showOtpSection = false
-                                                errorMessage = ""
-                                            } else {
-                                                errorMessage = "সঠিক যাচাইকরণ কোড লিখুন!"
-                                            }
-                                        }
-                                    ) {
-                                        Text("যাচাই করুন")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 4. Shop Address / Bazar
+                    // 3. Shop Address
                     OutlinedTextField(
                         value = address,
                         onValueChange = { address = it },
@@ -461,7 +834,7 @@ fun ShopRegistrationScreen(
                             .testTag("reg_address_input")
                     )
 
-                    // 5. District selection
+                    // 4. District
                     OutlinedTextField(
                         value = district,
                         onValueChange = { district = it },
@@ -499,7 +872,7 @@ fun ShopRegistrationScreen(
                         }
                     }
 
-                    // 6. Business Type
+                    // 5. Business Type Dropdown
                     Column {
                         Text(
                             text = "ব্যবসার ধরন নির্বাচন করুন *",
@@ -548,7 +921,7 @@ fun ShopRegistrationScreen(
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                    // 7. Security PIN Setup
+                    // 6. Security PIN Setup
                     Text(
                         text = "নিরাপদ পিন কোড সেটআপ (৪-৬ সংখ্যা)",
                         style = MaterialTheme.typography.titleSmall,
@@ -624,16 +997,16 @@ fun ShopRegistrationScreen(
                         )
                     }
 
-                    // Error Banner
-                    if (errorMessage.isNotBlank()) {
+                    // Success Message
+                    if (successMessage.isNotBlank()) {
                         Surface(
-                            color = MaterialTheme.colorScheme.errorContainer,
+                            color = Color(0xFFDCFCE7),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = errorMessage,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                text = successMessage,
+                                color = Color(0xFF15803D),
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.padding(10.dp)
@@ -641,7 +1014,42 @@ fun ShopRegistrationScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    // Error Message Banner
+                    if (errorMessage.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = errorMessage,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (PhoneAuthHelper.isProviderOrSmsRegionDisabledMessage(errorMessage) && selectedMethodTab == 0) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            selectedMethodTab = 1
+                                            errorMessage = ""
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            GoogleLogoMini(modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Google অ্যাকাউন্ট দিয়ে নিবন্ধন করুন (বিকল্প)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     // Registration Submit Button
                     Button(
@@ -679,55 +1087,43 @@ fun ShopRegistrationScreen(
                                 return@Button
                             }
 
-                            if (currentGoogleUser == null) {
-                                isGoogleSigningIn = true
-                                errorMessage = "সুপার অ্যাডমিন ও ক্লাউড সিঙ্কের জন্য Google অ্যাকাউন্ট নির্বাচন করুন..."
-                                GoogleSignInHelper.launchGoogleSignIn(
-                                    context = context,
-                                    scope = coroutineScope,
-                                    onAuthSuccess = { fUser ->
-                                        isGoogleSigningIn = false
-                                        currentGoogleUser = fUser
-                                        if (ownerName.isBlank() && !fUser.displayName.isNullOrBlank()) {
-                                            ownerName = fUser.displayName!!
-                                        }
-                                        isLoading = true
-                                        errorMessage = ""
-                                        viewModel.registerNewShop(
-                                            shopName = cleanShop,
-                                            ownerName = cleanOwner,
-                                            phone = cleanPhone,
-                                            address = cleanAddress,
-                                            district = cleanDistrict,
-                                            businessType = selectedBusinessType,
-                                            pin = cleanPin,
-                                            isPhoneVerified = isPhoneVerified,
-                                            ownerEmail = fUser.email ?: "",
-                                            ownerUid = fUser.uid,
-                                            superAdminViewModel = superAdminViewModel
-                                        ) { success, msg, newShopId ->
-                                            isLoading = false
-                                            if (success) {
-                                                successRegisteredShopId = newShopId
-                                            } else {
-                                                errorMessage = msg
-                                            }
-                                        }
-                                    },
-                                    onCancelled = {
-                                        isGoogleSigningIn = false
-                                        errorMessage = "সুপার অ্যাডমিন ড্যাশবোর্ডে নিবন্ধিত হতে Google সাইন-ইন আবশ্যক!"
-                                    },
-                                    onError = { err ->
-                                        isGoogleSigningIn = false
-                                        errorMessage = "Google সাইন-ইন ব্যর্থ: $err"
-                                    }
-                                )
-                                return@Button
+                            // Verify Authentication Provider Requirements
+                            val resolvedUid: String
+                            val resolvedEmail: String
+
+                            if (selectedMethodTab == 0) {
+                                // Mobile Number (Option A)
+                                val phoneUser = authenticatedPhoneUser
+                                    ?: try {
+                                        val u = FirebaseAuth.getInstance().currentUser
+                                        if (u != null && !u.phoneNumber.isNullOrBlank()) u else null
+                                    } catch (_: Exception) { null }
+
+                                if (phoneUser == null || !isPhoneVerified) {
+                                    errorMessage = "দোকান নিবন্ধনের আগে ওটিপি (OTP) কোড যাচাই সম্পন্ন করুন!"
+                                    return@Button
+                                }
+                                resolvedUid = phoneUser.uid
+                                resolvedEmail = phoneUser.email ?: ""
+                            } else {
+                                // Google Sign-In (Option B)
+                                val googleUser = authenticatedGoogleUser
+                                    ?: try {
+                                        val u = FirebaseAuth.getInstance().currentUser
+                                        if (u != null && !u.email.isNullOrBlank()) u else null
+                                    } catch (_: Exception) { null }
+
+                                if (googleUser == null) {
+                                    errorMessage = "দোকান নিবন্ধনের আগে Google অ্যাকাউন্ট দিয়ে সাইন-ইন সম্পন্ন করুন!"
+                                    return@Button
+                                }
+                                resolvedUid = googleUser.uid
+                                resolvedEmail = googleUser.email ?: ""
                             }
 
                             isLoading = true
                             errorMessage = ""
+                            successMessage = ""
 
                             viewModel.registerNewShop(
                                 shopName = cleanShop,
@@ -737,9 +1133,9 @@ fun ShopRegistrationScreen(
                                 district = cleanDistrict,
                                 businessType = selectedBusinessType,
                                 pin = cleanPin,
-                                isPhoneVerified = isPhoneVerified,
-                                ownerEmail = currentGoogleUser?.email ?: "",
-                                ownerUid = currentGoogleUser?.uid ?: "",
+                                isPhoneVerified = (selectedMethodTab == 0 && isPhoneVerified),
+                                ownerEmail = resolvedEmail,
+                                ownerUid = resolvedUid,
                                 superAdminViewModel = superAdminViewModel
                             ) { success, msg, newShopId ->
                                 isLoading = false
@@ -821,7 +1217,7 @@ fun ShopRegistrationScreen(
                         }
                     }
                     Text(
-                        text = "আপনার অ্যাকাউন্টটি প্ল্যাটফর্ম সুপার এডমিন কনসোলের সঙ্গে সংযুক্ত হয়েছে। আপনি এখনই সম্পূর্ণ বিনামূল্যে আপনার দোকানের বেচাকেনা পরিচালনা শুরু করতে পারেন।",
+                        text = "আপনার দোকানটি ক্লাউড ডাটাবেস ও প্ল্যাটফর্ম সুপার এডমিন কনসোলের সঙ্গে সংযুক্ত হয়েছে। আপনি এখনই সম্পূর্ণ বিনামূল্যে আপনার দোকানের বেচাকেনা পরিচালনা শুরু করতে পারেন।",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center

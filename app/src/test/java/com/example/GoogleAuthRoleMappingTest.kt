@@ -233,9 +233,17 @@ class GoogleAuthRoleMappingTest {
     @Test
     fun `test all authorized Super Admin emails are recognized and grant super admin status`() = runTest(testDispatcher) {
         val authorizedEmails = listOf(
-            "buddavaibinodon@gmail.com",
-            "ataursek9@gmail.com",
             "ataurgonee4@gmail.com",
+            "ataursek9@gmail.com"
+        )
+
+        for (email in authorizedEmails) {
+            assertTrue("Email $email must be recognized as authorized Super Admin", repo.isAuthorizedSuperAdminEmail(email))
+        }
+
+        // Test revoked emails
+        val revokedEmails = listOf(
+            "buddavaibinodon@gmail.com",
             "support@smartbiz.local",
             "gonee8666@gmail.com",
             "ataulgonee786@gmail.com",
@@ -244,18 +252,18 @@ class GoogleAuthRoleMappingTest {
             "a48268993@gmail.com",
             "jamesfashion792@gmail.com"
         )
-
-        for (email in authorizedEmails) {
-            assertTrue("Email $email must be recognized as authorized Super Admin", repo.isAuthorizedSuperAdminEmail(email))
+        for (email in revokedEmails) {
+            assertFalse("Email $email must NOT be authorized as Super Admin", repo.isAuthorizedSuperAdminEmail(email))
+            assertTrue("Email $email must be marked as revoked", repo.isRevokedSuperAdminEmail(email))
         }
 
         // Test login with authorized super admin
-        val superAdminEmail = "buddavaibinodon@gmail.com"
+        val superAdminEmail = "ataurgonee4@gmail.com"
         var loginSuccess: Boolean? = null
         var loginRole: UserRole? = null
 
         viewModel.handleGoogleUserCredentials(
-            uid = "super_admin_buddavai_uid",
+            uid = "super_admin_ataurgonee4_uid",
             email = superAdminEmail,
             displayName = "Super Admin Test",
             phoneNumber = null

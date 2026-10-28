@@ -300,29 +300,37 @@ class ShopIsolationAndGoogleAuthTest {
     }
 
     @Test
-    fun `test authorized Super Admin jamesfashion792@gmail_com is recognized`() = runTest(testDispatcher) {
+    fun `test authorized Super Admin ataursek9@gmail_com is recognized`() = runTest(testDispatcher) {
         // Verify SuperAdminRepository recognition
         assertTrue(
-            "jamesfashion792@gmail.com must be recognized as Super Admin in repository",
+            "ataursek9@gmail.com must be recognized as Super Admin in repository",
+            SuperAdminRepository.isSuperAdminEmail("ataursek9@gmail.com")
+        )
+        assertTrue(
+            "ataursek9@gmail.com uppercase must also be recognized case-insensitively",
+            SuperAdminRepository.isSuperAdminEmail("ATAURSEK9@GMAIL.COM")
+        )
+        assertTrue(
+            "BusinessRepository must recognize ataursek9@gmail.com as super admin",
+            viewModel.repository.isAuthorizedSuperAdminEmail("ataursek9@gmail.com")
+        )
+        assertFalse(
+            "jamesfashion792@gmail.com must be revoked from Super Admin in repository",
             SuperAdminRepository.isSuperAdminEmail("jamesfashion792@gmail.com")
         )
         assertTrue(
-            "jamesfashion792@gmail.com uppercase must also be recognized case-insensitively",
-            SuperAdminRepository.isSuperAdminEmail("JAMESFASHION792@GMAIL.COM")
-        )
-        assertTrue(
-            "BusinessRepository must recognize jamesfashion792@gmail.com as super admin",
-            viewModel.repository.isAuthorizedSuperAdminEmail("jamesfashion792@gmail.com")
+            "jamesfashion792@gmail.com must be marked as revoked",
+            SuperAdminRepository.isRevokedSuperAdminEmail("jamesfashion792@gmail.com")
         )
 
         // Test login through handleGoogleUserCredentials
         var loginSuccess: Boolean? = null
         var userRole: UserRole? = null
         viewModel.handleGoogleUserCredentials(
-            uid = "super_admin_google_uid_792",
-            email = "jamesfashion792@gmail.com",
-            displayName = "James Fashion Super Admin",
-            phoneNumber = "01799999999"
+            uid = "super_admin_google_uid_ataursek9",
+            email = "ataursek9@gmail.com",
+            displayName = "Ataur Sek Super Admin",
+            phoneNumber = "01700000000"
         ) { success, _, role ->
             loginSuccess = success
             userRole = role
@@ -360,5 +368,34 @@ class ShopIsolationAndGoogleAuthTest {
 
         val cancelErr = GoogleSignInHelper.getBengaliErrorMessage(Exception("Activity cancelled by user"))
         assertTrue("Cancellation must give clear Bengali message", cancelErr.contains("বাতিল"))
+    }
+
+    @Test
+    fun `test GoogleSignInHelper signing fingerprints and Web Client ID alignment`() {
+        assertEquals(
+            "APK_SIGNING_SHA1 must match the actual debug.keystore SHA-1 certificate digest",
+            "B4:F3:6C:65:C4:65:C9:22:00:43:5D:34:5C:E4:67:DC:FA:89:F8:C5",
+            GoogleSignInHelper.APK_SIGNING_SHA1
+        )
+        assertEquals(
+            "APK_SIGNING_SHA256 must match the actual debug.keystore SHA-256 certificate digest",
+            "8F:23:9A:56:F0:45:68:90:F4:9C:EC:CD:C8:90:B7:8D:6F:1E:0D:71:98:F2:2D:3E:31:82:DD:BA:75:99:BF:54",
+            GoogleSignInHelper.APK_SIGNING_SHA256
+        )
+        assertEquals(
+            "APPLICATION_ID must match the package name com.aistudio.smartbiz.mgr",
+            "com.aistudio.smartbiz.mgr",
+            GoogleSignInHelper.APPLICATION_ID
+        )
+        assertEquals(
+            "DEFAULT_WEB_CLIENT_ID must match google-services.json client_type 3 Web Client ID",
+            "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com",
+            GoogleSignInHelper.DEFAULT_WEB_CLIENT_ID
+        )
+
+        val diag = GoogleSignInHelper.getDiagnosticInfo(app)
+        assertNotNull("DiagnosticInfo must not be null", diag)
+        assertTrue("DiagnosticInfo webClientId must be populated", diag.webClientId.isNotBlank())
+        assertTrue("DiagnosticInfo actualSha1 must be populated", diag.actualSha1.isNotBlank())
     }
 }

@@ -33,19 +33,9 @@ service cloud.firestore {
 
     // Explicit revocation check
     function isRevokedSuperAdmin() {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == false;
-    }
-
-    // Super Admin: Master Email List (Google Verified Identity)
-    function isMasterAdminEmail() {
-      return isSignedIn() &&
-        request.auth.token.email != null &&
-        (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com') && (
+      return isSignedIn() && (
+        (request.auth.token.email != null && (
           request.auth.token.email in [
-            'ataurgonee4@gmail.com',
-            'ataursek9@gmail.com',
             'buddavaibinodon@gmail.com',
             'gonee8666@gmail.com',
             'ataulgonee786@gmail.com',
@@ -57,23 +47,48 @@ service cloud.firestore {
           ] ||
           (request.auth.token.email is string &&
            request.auth.token.email.lower() in [
+            'buddavaibinodon@gmail.com',
+            'gonee8666@gmail.com',
+            'ataulgonee786@gmail.com',
+            'ataurpos@gmail.com',
+            'ataur50305@gmail.com',
+            'a48268993@gmail.com',
+            'jamesfashion792@gmail.com',
+            'support@smartbiz.local'
+           ])
+        )) ||
+        (exists(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/platform_superadmins/$(request.auth.uid)).data.isActive == false)
+      );
+    }
+
+    // Super Admin: Master Email List (Google Verified Identity)
+    function isMasterAdminEmail() {
+      return isSignedIn() &&
+        request.auth.token.email != null &&
+        (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com') && (
+          request.auth.token.email in [
+            'ataurgonee4@gmail.com',
+            'ataursek9@gmail.com'
+          ] ||
+          (request.auth.token.email is string &&
+           request.auth.token.email.lower() in [
              'ataurgonee4@gmail.com',
-             'ataursek9@gmail.com',
-             'buddavaibinodon@gmail.com',
-             'gonee8666@gmail.com',
-             'ataulgonee786@gmail.com',
-             'ataurpos@gmail.com',
-             'ataur50305@gmail.com',
-             'a48268993@gmail.com',
-             'jamesfashion792@gmail.com',
-             'support@smartbiz.local'
+             'ataursek9@gmail.com'
            ])
         );
     }
 
+    // Super Admin: Master Phone Number (Phone Auth Verified)
+    function isMasterAdminPhone() {
+      return isSignedIn() &&
+        request.auth.token.phone_number != null &&
+        request.auth.token.phone_number in ['+8801700000000', '01700000000'];
+    }
+
     // Unified, synchronized Super Admin permission
     function isSuperAdmin() {
-      return !isRevokedSuperAdmin() && (isRegistrySuperAdmin() || isMasterAdminEmail());
+      return !isRevokedSuperAdmin() && (isRegistrySuperAdmin() || isMasterAdminEmail() || isMasterAdminPhone());
     }
 
     // Business ownership / staff helper
@@ -211,13 +226,13 @@ service cloud.firestore {
              ) &&
              (!('status' in data) || (data.status is string && data.status in ['ACTIVE', 'PENDING', 'SUSPENDED'])) &&
              (!('planId' in data) || (data.planId is string && data.planId.size() <= 50)) &&
-             (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && data.subscriptionStatus in ['ACTIVE', 'PENDING', 'EXPIRED']));
+             (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && data.subscriptionStatus in ['ACTIVE', 'PENDING', 'EXPIRED', 'TRIAL']));
     }
 
     // Business Scope Root
     match /businesses/{businessId} {
-      allow get: if isSuperAdmin() || (isSignedIn() && isBusinessStaff(businessId));
-      allow list: if isSuperAdmin();
+      allow get: if isSuperAdmin() || (isSignedIn() && (isBusinessStaff(businessId) || (resource != null && resource.data.ownerUid == request.auth.uid)));
+      allow list: if isSuperAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
       allow create: if isSuperAdmin() || (
         isSignedIn() && (
           request.auth.uid == businessId ||
@@ -227,7 +242,7 @@ service cloud.firestore {
         isValidNewShopRegistration(incoming(), businessId) &&
         (!('planId' in incoming()) || incoming().planId in ['plan_free', 'free', 'basic', 'default']) &&
         (!('status' in incoming()) || incoming().status in ['PENDING', 'ACTIVE']) &&
-        (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus in ['PENDING', 'ACTIVE'])
+        (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus in ['PENDING', 'ACTIVE', 'TRIAL'])
       );
       allow update: if isSuperAdmin() || (
         isBusinessOwner(businessId) &&

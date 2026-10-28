@@ -28,10 +28,21 @@ class SuperAdminRepository(
     companion object {
         private const val TAG = "SuperAdminRepo"
 
+        // Explicitly authorized Super Admin Gmail accounts
         val AUTHORIZED_SUPER_ADMIN_EMAILS = setOf(
-            "buddavaibinodon@gmail.com",
-            "ataursek9@gmail.com",
             "ataurgonee4@gmail.com",
+            "ataursek9@gmail.com"
+        )
+
+        // Explicitly authorized Super Admin mobile phone numbers
+        val AUTHORIZED_SUPER_ADMIN_PHONES = setOf(
+            "01700000000",
+            "+8801700000000"
+        )
+
+        // Revoked accounts - strictly stripped of platform Super Admin privileges
+        val REVOKED_SUPER_ADMIN_EMAILS = setOf(
+            "buddavaibinodon@gmail.com",
             "support@smartbiz.local",
             "gonee8666@gmail.com",
             "ataulgonee786@gmail.com",
@@ -43,7 +54,30 @@ class SuperAdminRepository(
 
         fun isSuperAdminEmail(email: String?): Boolean {
             if (email.isNullOrBlank()) return false
-            return AUTHORIZED_SUPER_ADMIN_EMAILS.contains(email.trim().lowercase())
+            val clean = email.trim().lowercase()
+            if (REVOKED_SUPER_ADMIN_EMAILS.contains(clean)) return false
+            return AUTHORIZED_SUPER_ADMIN_EMAILS.contains(clean)
+        }
+
+        fun isRevokedSuperAdminEmail(email: String?): Boolean {
+            if (email.isNullOrBlank()) return false
+            return REVOKED_SUPER_ADMIN_EMAILS.contains(email.trim().lowercase())
+        }
+
+        fun isSuperAdminPhone(phone: String?): Boolean {
+            if (phone.isNullOrBlank()) return false
+            val clean = phone.replace(Regex("[^0-9+]"), "").trim()
+            val normalized = when {
+                clean.startsWith("+880") -> "0" + clean.substring(4)
+                clean.startsWith("880") -> "0" + clean.substring(3)
+                else -> clean
+            }
+            return AUTHORIZED_SUPER_ADMIN_PHONES.contains(normalized) || AUTHORIZED_SUPER_ADMIN_PHONES.contains(clean)
+        }
+
+        fun isSuperAdminIdentity(email: String?, phone: String? = null): Boolean {
+            if (isRevokedSuperAdminEmail(email)) return false
+            return isSuperAdminEmail(email) || isSuperAdminPhone(phone)
         }
 
         fun getDefaultPlans(): List<SubscriptionPlan> {
@@ -493,21 +527,29 @@ class SuperAdminRepository(
      * Actively fetches all registered shops from Cloud Firestore backend.
      * Merges remote businesses with existing and updates local persistence.
      */
+    /**
+     * Actively fetches all registered shops from Cloud Firestore backend.
+     * Merges remote businesses with existing and updates local persistence.
+     * Accessible exclusively to authorized Super Admin identities (ataurgonee4@gmail.com, ataursek9@gmail.com, 01700000000).
+     */
     suspend fun refreshBusinessesFromRemote(): Result<List<PlatformBusiness>> {
         if (!isFirebaseConfigured()) {
             return Result.success(_businesses.value)
         }
         val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
         if (authUser == null) {
-            val msg = "ফায়ারবেস অথেনটিকেশন অনুপস্থিত: ক্লাউড থেকে সকল দোকানের তথ্য দেখতে গুগল সাইন-ইন নিশ্চিত করুন।"
+            val msg = "ফায়ারবেস অথেনটিকেশন অনুপস্থিত: ক্লাউড থেকে সকল দোকানের তথ্য দেখতে গুগল সাইন-ইন বা ফোন ওটিপি লগইন সম্পন্ন করুন।"
             Log.w(TAG, "refreshBusinessesFromRemote: $msg")
             return Result.failure(IllegalStateException("NO_FIREBASE_AUTH: $msg"))
         }
         val currentEmail = authUser.email?.trim()?.lowercase() ?: ""
-        if (!isSuperAdminEmail(currentEmail)) {
-            val msg = "অননুমোদিত গুগল একাউন্ট ($currentEmail): শুধুমাত্র অনুমোদিত সুপার এডমিন গুগল একাউন্ট (ataurgonee4@gmail.com) থেকে সকল দোকানের তথ্য পড়া সম্ভব।"
+        val currentPhone = authUser.phoneNumber?.trim() ?: ""
+        val isAuthorized = isSuperAdminIdentity(currentEmail, currentPhone)
+        if (!isAuthorized) {
+            val identifier = currentEmail.ifBlank { currentPhone }
+            val msg = "অননুমোদিত অ্যাকাউন্ট ($identifier): শুধুমাত্র অনুমোদিত সুপার এডমিন (ataurgonee4@gmail.com, ataursek9@gmail.com, 01700000000) থেকে প্ল্যাটফর্মের সকল দোকানের তথ্য দেখা সম্ভব।"
             Log.w(TAG, "refreshBusinessesFromRemote: $msg")
-            return Result.failure(SecurityException("UNAUTHORIZED_EMAIL: $msg"))
+            return Result.failure(SecurityException("UNAUTHORIZED_SUPER_ADMIN: $msg"))
         }
         return try {
             val firestore = FirebaseFirestore.getInstance()
@@ -517,6 +559,8 @@ class SuperAdminRepository(
             }
             if (remoteList.isNotEmpty()) {
                 val current = _businesses.value.toMutableList()
+                // Clear initial static mock seeds when authoritative cloud records exist
+                current.removeAll { it.id == "biz_fashion_house_2" || it.id == "biz_dhaka_traders_3" }
                 remoteList.forEach { remote ->
                     val idx = current.indexOfFirst {
                         it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
@@ -541,13 +585,19 @@ class SuperAdminRepository(
         }
     }
 
+    private var auditLogsListenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+    private var paymentsListenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+
     fun startRemoteListeners() {
         if (!isFirebaseConfigured()) return
         val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-        if (authUser == null || !isSuperAdminEmail(authUser.email)) return
+        val currentEmail = authUser?.email?.trim()?.lowercase() ?: ""
+        val currentPhone = authUser?.phoneNumber?.trim() ?: ""
+        if (authUser == null || !isSuperAdminIdentity(currentEmail, currentPhone)) return
 
         try {
             val firestore = FirebaseFirestore.getInstance()
+            // 1. Remote Businesses Listener
             businessesListenerRegistration?.remove()
             businessesListenerRegistration = firestore.collection("businesses").addSnapshotListener { snapshot, err ->
                 if (err != null) {
@@ -573,6 +623,77 @@ class SuperAdminRepository(
                     }
                 }
             }
+
+            // 2. Remote Audit Logs Listener
+            auditLogsListenerRegistration?.remove()
+            auditLogsListenerRegistration = firestore.collection("platform_audit_logs")
+                .orderBy("timestamp", Query.Direction.DESCENDING)
+                .limit(100)
+                .addSnapshotListener { snapshot, err ->
+                    if (err != null || snapshot == null) return@addSnapshotListener
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        try {
+                            PlatformAuditLog(
+                                id = doc.id,
+                                actorUid = doc.getString("actorUid") ?: "",
+                                actorName = doc.getString("actorName") ?: "অ্যাডমিন",
+                                actorEmail = doc.getString("actorEmail") ?: "",
+                                action = doc.getString("action") ?: "",
+                                targetBusinessId = doc.getString("targetBusinessId") ?: "",
+                                targetBusinessName = doc.getString("targetBusinessName") ?: "",
+                                details = doc.getString("details") ?: "",
+                                timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    if (list.isNotEmpty()) {
+                        _auditLogs.value = list
+                    }
+                }
+
+            // 3. Remote Payments Listener
+            paymentsListenerRegistration?.remove()
+            paymentsListenerRegistration = firestore.collection("platform_payments")
+                .orderBy("submittedAt", Query.Direction.DESCENDING)
+                .limit(100)
+                .addSnapshotListener { snapshot, err ->
+                    if (err != null || snapshot == null) return@addSnapshotListener
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        try {
+                            val methodStr = doc.getString("paymentMethod") ?: "BKASH"
+                            val method = try { PlatformPaymentMethod.valueOf(methodStr) } catch (_: Exception) { PlatformPaymentMethod.BKASH }
+                            val statusStr = doc.getString("status") ?: "PENDING"
+                            val status = try { PlatformPaymentStatus.valueOf(statusStr) } catch (_: Exception) { PlatformPaymentStatus.PENDING }
+
+                            PlatformPayment(
+                                id = doc.id,
+                                businessId = doc.getString("businessId") ?: "",
+                                businessName = doc.getString("businessName") ?: "",
+                                amount = doc.getDouble("amount") ?: 0.0,
+                                currency = doc.getString("currency") ?: "BDT",
+                                paymentMethod = method,
+                                transactionReference = doc.getString("transactionReference") ?: "",
+                                senderNumber = doc.getString("senderNumber") ?: "",
+                                status = status,
+                                targetPlanId = doc.getString("targetPlanId") ?: "plan_pro",
+                                durationMonths = (doc.getLong("durationMonths") ?: 1).toInt(),
+                                submittedAt = doc.getLong("submittedAt") ?: System.currentTimeMillis(),
+                                reviewedAt = doc.getLong("reviewedAt"),
+                                reviewedByUid = doc.getString("reviewedByUid"),
+                                reviewedByName = doc.getString("reviewedByName"),
+                                rejectionReason = doc.getString("rejectionReason") ?: "",
+                                notes = doc.getString("notes") ?: ""
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    if (list.isNotEmpty()) {
+                        _payments.value = list
+                    }
+                }
         } catch (e: Exception) {
             Log.w(TAG, "startRemoteListeners exception: ${e.message}")
         }
@@ -582,100 +703,12 @@ class SuperAdminRepository(
         if (!isFirebaseConfigured()) return
         scope.launch {
             try {
-                val firestore = FirebaseFirestore.getInstance()
-
-                // 1. Remote Businesses Listener
-                if (businessesListenerRegistration == null) {
-                    businessesListenerRegistration = firestore.collection("businesses").addSnapshotListener { snapshot, err ->
-                        if (err != null || snapshot == null) return@addSnapshotListener
-                        val remoteList = snapshot.documents.mapNotNull { doc -> parseBusinessDoc(doc) }
-                        if (remoteList.isNotEmpty()) {
-                            val current = _businesses.value.toMutableList()
-                            remoteList.forEach { remote ->
-                                val idx = current.indexOfFirst {
-                                    it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
-                                }
-                                if (idx >= 0) {
-                                    current[idx] = remote
-                                } else {
-                                    current.add(0, remote)
-                                }
-                            }
-                            _businesses.value = current
-                            saveBusinessesLocally(current)
-                        }
-                    }
+                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val currentEmail = authUser?.email?.trim()?.lowercase() ?: ""
+                val currentPhone = authUser?.phoneNumber?.trim() ?: ""
+                if (authUser != null && isSuperAdminIdentity(currentEmail, currentPhone)) {
+                    startRemoteListeners()
                 }
-
-                // 2. Remote Audit Logs
-                firestore.collection("platform_audit_logs")
-                    .orderBy("timestamp", Query.Direction.DESCENDING)
-                    .limit(100)
-                    .addSnapshotListener { snapshot, err ->
-                        if (err != null || snapshot == null) return@addSnapshotListener
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            try {
-                                PlatformAuditLog(
-                                    id = doc.id,
-                                    actorUid = doc.getString("actorUid") ?: "",
-                                    actorName = doc.getString("actorName") ?: "অ্যাডমিন",
-                                    actorEmail = doc.getString("actorEmail") ?: "",
-                                    action = doc.getString("action") ?: "",
-                                    targetBusinessId = doc.getString("targetBusinessId") ?: "",
-                                    targetBusinessName = doc.getString("targetBusinessName") ?: "",
-                                    details = doc.getString("details") ?: "",
-                                    timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                                )
-                            } catch (_: Exception) {
-                                null
-                            }
-                        }
-                        if (list.isNotEmpty()) {
-                            _auditLogs.value = list
-                        }
-                    }
-
-                // 3. Remote Payments
-                firestore.collection("platform_payments")
-                    .orderBy("submittedAt", Query.Direction.DESCENDING)
-                    .limit(100)
-                    .addSnapshotListener { snapshot, err ->
-                        if (err != null || snapshot == null) return@addSnapshotListener
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            try {
-                                val methodStr = doc.getString("paymentMethod") ?: "BKASH"
-                                val method = try { PlatformPaymentMethod.valueOf(methodStr) } catch (_: Exception) { PlatformPaymentMethod.BKASH }
-                                val statusStr = doc.getString("status") ?: "PENDING"
-                                val status = try { PlatformPaymentStatus.valueOf(statusStr) } catch (_: Exception) { PlatformPaymentStatus.PENDING }
-
-                                PlatformPayment(
-                                    id = doc.id,
-                                    businessId = doc.getString("businessId") ?: "",
-                                    businessName = doc.getString("businessName") ?: "",
-                                    amount = doc.getDouble("amount") ?: 0.0,
-                                    currency = doc.getString("currency") ?: "BDT",
-                                    paymentMethod = method,
-                                    transactionReference = doc.getString("transactionReference") ?: "",
-                                    senderNumber = doc.getString("senderNumber") ?: "",
-                                    status = status,
-                                    targetPlanId = doc.getString("targetPlanId") ?: "plan_pro",
-                                    durationMonths = (doc.getLong("durationMonths") ?: 1).toInt(),
-                                    submittedAt = doc.getLong("submittedAt") ?: System.currentTimeMillis(),
-                                    reviewedAt = doc.getLong("reviewedAt"),
-                                    reviewedByUid = doc.getString("reviewedByUid"),
-                                    reviewedByName = doc.getString("reviewedByName"),
-                                    rejectionReason = doc.getString("rejectionReason") ?: "",
-                                    notes = doc.getString("notes") ?: ""
-                                )
-                            } catch (_: Exception) {
-                                null
-                            }
-                        }
-                        if (list.isNotEmpty()) {
-                            _payments.value = list
-                        }
-                    }
-
             } catch (e: Exception) {
                 Log.w(TAG, "initRemoteListeners note: ${e.message}")
             }
@@ -1036,6 +1069,52 @@ class SuperAdminRepository(
         }
     }
 
+    suspend fun findBusinessByOwner(ownerUid: String, ownerEmail: String = ""): PlatformBusiness? {
+        val cleanUid = ownerUid.trim()
+        val cleanEmail = ownerEmail.trim().lowercase()
+
+        // 1. Check in-memory state
+        val localMatch = _businesses.value.firstOrNull {
+            (cleanUid.isNotBlank() && it.ownerUid == cleanUid) ||
+            (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true))
+        }
+        if (localMatch != null) return localMatch
+
+        // 2. Query Firestore if configured and signed in
+        if (isFirebaseConfigured() && isUserSignedIn()) {
+            try {
+                val firestore = FirebaseFirestore.getInstance()
+                if (cleanUid.isNotBlank()) {
+                    val querySnap = firestore.collection("businesses")
+                        .whereEqualTo("ownerUid", cleanUid)
+                        .limit(1)
+                        .get()
+                        .await()
+                    val foundDoc = querySnap.documents.firstOrNull()
+                    if (foundDoc != null) {
+                        val parsed = parseBusinessDoc(foundDoc)
+                        if (parsed != null) return parsed
+                    }
+                }
+                if (cleanEmail.isNotBlank()) {
+                    val querySnapEmail = firestore.collection("businesses")
+                        .whereEqualTo("ownerEmail", cleanEmail)
+                        .limit(1)
+                        .get()
+                        .await()
+                    val foundDoc = querySnapEmail.documents.firstOrNull()
+                    if (foundDoc != null) {
+                        val parsed = parseBusinessDoc(foundDoc)
+                        if (parsed != null) return parsed
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "findBusinessByOwner query error: ${e.message}")
+            }
+        }
+        return null
+    }
+
     suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
         val cleanPhone = business.ownerPhone.trim()
 
@@ -1050,9 +1129,11 @@ class SuperAdminRepository(
                     "businessName" to business.businessName,
                     "ownerUid" to business.ownerUid,
                     "ownerName" to business.ownerName,
+                    "ownerEmail" to business.ownerEmail.trim().lowercase(),
                     "ownerPhone" to cleanPhone,
                     "phone" to cleanPhone,
                     "status" to business.status.name,
+                    "statusReason" to business.statusReason,
                     "planId" to business.planId,
                     "planName" to business.planName,
                     "subscriptionStatus" to business.subscriptionStatus.name,
@@ -1085,6 +1166,7 @@ class SuperAdminRepository(
                         "businessId" to business.id,
                         "businessName" to business.businessName,
                         "ownerName" to business.ownerName,
+                        "ownerUid" to business.ownerUid,
                         "createdAt" to business.createdAt
                     )
                     try {
@@ -1319,4 +1401,146 @@ class SuperAdminRepository(
             lastUpdated = now
         )
     }
+
+    /**
+     * Performs a dry-run audit of Super Admin authorizations and revocations.
+     * Generates a detailed audit trail without modifying database rows.
+     */
+    fun performDryRunAudit(localUsers: List<User> = emptyList()): List<SuperAdminAuditRecord> {
+        val records = mutableListOf<SuperAdminAuditRecord>()
+
+        // 1. Authorized Identities (Preserved)
+        records.add(
+            SuperAdminAuditRecord(
+                identifier = "ataurgonee4@gmail.com",
+                previousRole = "SUPER_ADMIN",
+                newRole = "SUPER_ADMIN",
+                status = "AUTHORIZED_SUPER_ADMIN_PRESERVED",
+                revocationReason = "অনুমোদিত প্ল্যাটফর্ম মূল সুপার এডমিন জিমেইল অ্যাকাউন্ট (Allowlist)",
+                preservedData = "সকল প্ল্যাটফর্ম প্রশাসন, দোকানের তালিকা এবং অনুমোদন অধিকার সম্পূর্ণ অক্ষত"
+            )
+        )
+        records.add(
+            SuperAdminAuditRecord(
+                identifier = "ataursek9@gmail.com",
+                previousRole = "SUPER_ADMIN",
+                newRole = "SUPER_ADMIN",
+                status = "AUTHORIZED_SUPER_ADMIN_PRESERVED",
+                revocationReason = "অনুমোদিত প্ল্যাটফর্ম সুপার এডমিন জিমেইল অ্যাকাউন্ট (Allowlist)",
+                preservedData = "সকল প্ল্যাটফর্ম প্রশাসন ও ড্যাশবোর্ড অধিকার বহাল"
+            )
+        )
+        records.add(
+            SuperAdminAuditRecord(
+                identifier = "01700000000",
+                previousRole = "SUPER_ADMIN",
+                newRole = "SUPER_ADMIN",
+                status = "AUTHORIZED_SUPER_ADMIN_PRESERVED",
+                revocationReason = "অনুমোদিত প্ল্যাটফর্ম সুপার এডমিন মোবাইল নম্বর (Allowlist)",
+                preservedData = "সুপার এডমিন ও প্রাথমিক স্টোর অ্যাডমিন অধিকার বহাল"
+            )
+        )
+
+        // 2. Revoked Identities (Excluded and demoted to regular shop roles without deleting data)
+        REVOKED_SUPER_ADMIN_EMAILS.forEach { revokedEmail ->
+            val matchingLocalUser = localUsers.firstOrNull {
+                it.name.contains(revokedEmail, ignoreCase = true) || it.phone == revokedEmail
+            }
+            records.add(
+                SuperAdminAuditRecord(
+                    identifier = revokedEmail,
+                    previousRole = "SUPER_ADMIN (EXPERIMENTAL / LEGACY)",
+                    newRole = if (matchingLocalUser != null) matchingLocalUser.role.name else "ADMIN (SHOP_LEVEL)",
+                    status = "SUPER_ADMIN_PRIVILEGE_REVOKED",
+                    revocationReason = if (revokedEmail == "buddavaibinodon@gmail.com") {
+                        "ইউজারের সুনির্দিষ্ট নির্দেশ অনুযায়ী buddavaibinodon@gmail.com এর সুপার এডমিন অধিকার প্রত্যাহার করা হয়েছে।"
+                    } else {
+                        "অননুমোদিত পরীক্ষামূলক একাউন্ট; শুধুমাত্র নির্ধারিত অনুমোদিত তালিকায় থাকা একাউন্ট সুপার এডমিন হতে পারবে।"
+                    },
+                    preservedData = "দোকানের সকল ডেটা, পণ্যের স্টক, বিক্রয় রশিদ ও কাস্টমার তালিকা ১০০% সংরক্ষিত"
+                )
+            )
+        }
+
+        return records
+    }
+
+    /**
+     * Executes safe revocation migration:
+     * 1. Demotes unauthorized Super Admins in local Room DB to regular store Admin.
+     * 2. Clears SharedPreferences flags for revoked emails.
+     * 3. Syncs revocation status to Firestore /platform_superadmins registry.
+     * Never deletes business documents, sales, products, or customer records.
+     */
+    suspend fun executeSafeRevocationMigration(database: com.example.data.AppDatabase?): List<SuperAdminAuditRecord> {
+        val localUsers = try { database?.userDao()?.getAllActiveUsersList() ?: emptyList() } catch (_: Exception) { emptyList() }
+        val auditRecords = performDryRunAudit(localUsers)
+
+        // 1. Local Database migration: demote any revoked users from SUPER_ADMIN to ADMIN
+        database?.let { db ->
+            localUsers.forEach { user ->
+                if (user.role == UserRole.SUPER_ADMIN) {
+                    val isStillSuperAdmin = isSuperAdminPhone(user.phone)
+                    if (!isStillSuperAdmin) {
+                        val demoted = user.copy(role = UserRole.ADMIN)
+                        try {
+                            db.userDao().updateUser(demoted)
+                            Log.i(TAG, "Migrated user ${user.id} (${user.phone}) to ADMIN")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "User demote failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. SharedPreferences sync
+        try {
+            val storedEmail = com.example.data.sync.CloudBusinessAuth.getStoredAuthEmail(context)
+            if (!storedEmail.isNullOrBlank() && (isRevokedSuperAdminEmail(storedEmail) || !isSuperAdminEmail(storedEmail))) {
+                com.example.data.sync.CloudBusinessAuth.setStoredSuperAdminFlag(context, false)
+                Log.i(TAG, "Cleared stored Super Admin flag for $storedEmail")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "SharedPrefs revocation cleanup error: ${e.message}")
+        }
+
+        // 3. Remote Firestore registry synchronization
+        if (isFirebaseConfigured() && isUserSignedIn()) {
+            try {
+                val firestore = FirebaseFirestore.getInstance()
+                // Mark revoked accounts in platform_superadmins registry
+                REVOKED_SUPER_ADMIN_EMAILS.forEach { email ->
+                    val docId = "revoked_${email.replace('@', '_').replace('.', '_')}"
+                    val revocationData = mapOf(
+                        "email" to email,
+                        "role" to "ADMIN",
+                        "isActive" to false,
+                        "isSuperAdmin" to false,
+                        "revokedAt" to System.currentTimeMillis(),
+                        "revocationReason" to "Super Admin privilege revoked per platform allowlist policy"
+                    )
+                    firestore.collection("platform_superadmins").document(docId)
+                        .set(revocationData, SetOptions.merge())
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Remote revocation registry note: ${e.message}")
+            }
+        }
+
+        return auditRecords
+    }
 }
+
+/**
+ * Data model for Super Admin authorization audit log and migration reports.
+ */
+data class SuperAdminAuditRecord(
+    val identifier: String,
+    val previousRole: String,
+    val newRole: String,
+    val status: String,
+    val revocationReason: String,
+    val preservedData: String
+)
+

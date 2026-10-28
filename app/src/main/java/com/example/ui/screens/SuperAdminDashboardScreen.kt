@@ -52,7 +52,7 @@ fun SuperAdminDashboardScreen(
     )
 ) {
     val isAuthorized = remember(currentSuperAdminEmail) {
-        SuperAdminRepository.isSuperAdminEmail(currentSuperAdminEmail)
+        SuperAdminRepository.isSuperAdminEmail(currentSuperAdminEmail) || SuperAdminRepository.isSuperAdminPhone(currentSuperAdminEmail)
     }
 
     if (!isAuthorized) {

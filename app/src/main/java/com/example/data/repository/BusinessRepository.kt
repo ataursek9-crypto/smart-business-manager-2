@@ -817,6 +817,14 @@ class BusinessRepository(
         return SuperAdminRepository.isSuperAdminEmail(email)
     }
 
+    fun isAuthorizedSuperAdminPhone(phone: String): Boolean {
+        return SuperAdminRepository.isSuperAdminPhone(phone)
+    }
+
+    fun isRevokedSuperAdminEmail(email: String): Boolean {
+        return SuperAdminRepository.isRevokedSuperAdminEmail(email)
+    }
+
     suspend fun updateAdminSecurityCredentials(
         adminId: String,
         currentPin: String,

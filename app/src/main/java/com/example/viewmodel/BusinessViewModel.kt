@@ -663,19 +663,27 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             reminderManager.schedulePeriodicCheck()
             alertRepository.checkAndDispatchScheduledAlerts()
 
-            // Auto-restore Super Admin session ONLY if previously authenticated with verified email
+            // Auto-restore Super Admin session ONLY if previously authenticated with verified allowlisted identity
             try {
+                val superAdminRepo = SuperAdminRepository.getInstance(application)
                 val authUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
                 val storedEmail = authUser?.email?.trim()?.lowercase() ?: CloudBusinessAuth.getStoredAuthEmail(application)
                 val isStoredSuperAdmin = CloudBusinessAuth.isStoredSuperAdmin(application)
-                if (isStoredSuperAdmin && !storedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(storedEmail)) {
-                    val uid = authUser?.uid ?: "superadmin_${storedEmail.replace('@', '_').replace('.', '_')}"
+                val userPhone = authUser?.phoneNumber?.trim() ?: ""
+
+                val isEmailAuthorized = !storedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(storedEmail)
+                val isPhoneAuthorized = repository.isAuthorizedSuperAdminPhone(userPhone)
+                val isRevoked = !storedEmail.isNullOrBlank() && repository.isRevokedSuperAdminEmail(storedEmail)
+
+                if (isStoredSuperAdmin && !isRevoked && (isEmailAuthorized || isPhoneAuthorized)) {
+                    val verifiedIdentifier = if (isEmailAuthorized) storedEmail!! else userPhone
+                    val uid = authUser?.uid ?: "superadmin_${verifiedIdentifier.replace('@', '_').replace('.', '_').replace('+', '_')}"
                     val existing = repository.getUserById(uid)
                         ?: repository.getUserByPhone("01700000000")
                         ?: repository.getUserById("admin_1")
                     if (existing == null || (existing.isActive && existing.accountStatus == UserAccountStatus.ACTIVE)) {
                         _isSuperAdminSession.value = true
-                        _superAdminVerifiedEmail.value = storedEmail
+                        _superAdminVerifiedEmail.value = verifiedIdentifier
                         _superAdminUid.value = uid
                         _currentGoogleEmail.value = storedEmail
                         val superAdminUser = if (existing != null) {
@@ -1099,6 +1107,19 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
 
+                // Check if current authenticated user (Google or Phone) already owns a business
+                val currentAuth = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val effectiveOwnerUid = if (ownerUid.isNotBlank()) ownerUid else (currentAuth?.uid ?: "")
+                val effectiveEmail = if (ownerEmail.isNotBlank()) ownerEmail else (currentAuth?.email ?: "")
+
+                if (effectiveOwnerUid.isNotBlank() || effectiveEmail.isNotBlank()) {
+                    val existingBiz = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail)
+                    if (existingBiz != null) {
+                        onResult(false, "আপনার এই অ্যাকাউন্টে ইতিমধ্যে '${existingBiz.businessName}' নামের একটি দোকান নিবন্ধিত রয়েছে! পুনরায় নতুন দোকান নিবন্ধনের প্রয়োজন নেই।", existingBiz.id)
+                        return@launch
+                    }
+                }
+
                 // Generate unique Shop ID for platform and local database isolation
                 val shopId = "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
 
@@ -1123,9 +1144,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val platformBiz = PlatformBusiness(
                     id = shopId,
                     businessName = shopName.trim(),
-                    ownerUid = if (ownerUid.isNotBlank()) ownerUid else newAdmin.id,
+                    ownerUid = if (effectiveOwnerUid.isNotBlank()) effectiveOwnerUid else newAdmin.id,
                     ownerName = ownerName.trim(),
-                    ownerEmail = ownerEmail.trim().lowercase(),
+                    ownerEmail = effectiveEmail.trim().lowercase(),
                     ownerPhone = normalizedPhone,
                     status = BusinessAccountStatus.PENDING,
                     planId = "plan_free",
@@ -1187,7 +1208,11 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     if (superAdminRepo.isFirebaseConfigured() || syncManager.isCloudBackendConfigured()) {
                         syncManager.ensureBusinessDocExists(shopId, newAdmin.id, shopName.trim())
                         syncManager.ensureStaffLinked(shopId, newAdmin.id, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
+                        if (effectiveOwnerUid.isNotBlank() && effectiveOwnerUid != newAdmin.id) {
+                            syncManager.ensureStaffLinked(shopId, effectiveOwnerUid, newAdmin.phone, newAdmin.name, UserRole.ADMIN.name)
+                        }
                     }
+                    superAdminViewModel?.refreshBusinesses()
                 } catch (e: Exception) {
                     Log.w("RegisterShop", "Cloud linking skipped: ${e.message}")
                 }
@@ -1355,9 +1380,15 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             return false
         }
 
-        // The verified session email must strictly match authorized Super Admin emails
+        // The verified session email or phone must strictly match authorized Super Admin allowlist
         val verifiedEmail = _superAdminVerifiedEmail.value?.trim()?.lowercase()
-        if (verifiedEmail.isNullOrBlank() || !repository.isAuthorizedSuperAdminEmail(verifiedEmail)) {
+        val userPhone = user.phone.trim()
+
+        val isEmailAuthorized = !verifiedEmail.isNullOrBlank() && repository.isAuthorizedSuperAdminEmail(verifiedEmail)
+        val isPhoneAuthorized = repository.isAuthorizedSuperAdminPhone(userPhone)
+        val isRevoked = !verifiedEmail.isNullOrBlank() && repository.isRevokedSuperAdminEmail(verifiedEmail)
+
+        if (isRevoked || (!isEmailAuthorized && !isPhoneAuthorized)) {
             return false
         }
 
@@ -1374,6 +1405,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
         if (!isSuperAdminUser()) return ""
         return _superAdminVerifiedEmail.value?.takeIf { it.isNotBlank() }
             ?: _currentGoogleEmail.value?.takeIf { it.isNotBlank() && repository.isAuthorizedSuperAdminEmail(it) }
+            ?: _currentUser.value?.phone?.takeIf { repository.isAuthorizedSuperAdminPhone(it) }
             ?: ""
     }
 
@@ -1413,7 +1445,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             val name = displayName ?: "গুগল ব্যবহারকারী"
 
             // Step 1: Check if this Google account is an AUTHORIZED PLATFORM SUPER ADMIN
-            val isSuperAdmin = cleanEmail.isNotBlank() && repository.isAuthorizedSuperAdminEmail(cleanEmail)
+            val isSuperAdmin = cleanEmail.isNotBlank() &&
+                    repository.isAuthorizedSuperAdminEmail(cleanEmail) &&
+                    !repository.isRevokedSuperAdminEmail(cleanEmail)
             if (isSuperAdmin) {
                 // Identity verification and Account Mapping:
                 // Check if user already exists by Firebase UID, or existing Super Admin phone ("01700000000"), or seed admin_1
@@ -1498,10 +1532,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             var resolvedShopId = linkedShopId ?: ""
             if (resolvedUser == null) {
                 val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
-                val matchedBiz = superAdminRepo.businesses.value.firstOrNull {
-                    (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true)) ||
-                    (uid.isNotBlank() && it.ownerUid == uid)
-                }
+                val matchedBiz = superAdminRepo.findBusinessByOwner(uid, cleanEmail)
                 if (matchedBiz != null) {
                     resolvedShopId = matchedBiz.id
                     if (matchedBiz.ownerPhone.isNotBlank()) {
@@ -1509,6 +1540,20 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     }
                     if (resolvedUser == null && matchedBiz.ownerUid.isNotBlank()) {
                         resolvedUser = repository.getUserById(matchedBiz.ownerUid)
+                    }
+                    if (resolvedUser == null) {
+                        val adminUser = User(
+                            id = uid,
+                            name = matchedBiz.ownerName.ifBlank { name },
+                            phone = matchedBiz.ownerPhone.ifBlank { "01700000000" },
+                            role = UserRole.ADMIN,
+                            pinHash = repository.hashPin("1234"),
+                            isActive = true,
+                            accountStatus = UserAccountStatus.ACTIVE,
+                            shopId = matchedBiz.id
+                        )
+                        repository.saveUserDirect(adminUser)
+                        resolvedUser = adminUser
                     }
                 }
             }

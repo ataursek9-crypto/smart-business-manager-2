@@ -51,9 +51,12 @@ class SuperAdminSystemTest {
         assertFalse(SuperAdminRepository.isSuperAdminEmail(null))
         assertFalse(SuperAdminRepository.isSuperAdminEmail(""))
 
-        assertTrue(SuperAdminRepository.isSuperAdminEmail("buddavaibinodon@gmail.com"))
+        assertFalse(SuperAdminRepository.isSuperAdminEmail("buddavaibinodon@gmail.com"))
+        assertTrue(SuperAdminRepository.isRevokedSuperAdminEmail("buddavaibinodon@gmail.com"))
         assertTrue(SuperAdminRepository.isSuperAdminEmail("ataurgonee4@gmail.com"))
-        assertTrue(SuperAdminRepository.isSuperAdminEmail("support@smartbiz.local"))
+        assertTrue(SuperAdminRepository.isSuperAdminEmail("ataursek9@gmail.com"))
+        assertTrue(SuperAdminRepository.isSuperAdminPhone("01700000000"))
+        assertTrue(SuperAdminRepository.isSuperAdminPhone("+8801700000000"))
     }
 
     @Test
@@ -68,7 +71,7 @@ class SuperAdminSystemTest {
             reason = "নমুনা অডিট পরীক্ষা",
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -91,7 +94,7 @@ class SuperAdminSystemTest {
             reason = "বকেয়া পরিশোধ সাপেক্ষে সক্রিয়করণ",
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -110,7 +113,7 @@ class SuperAdminSystemTest {
             durationDays = 60,
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -129,7 +132,7 @@ class SuperAdminSystemTest {
             rejectionReason = "",
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(approveRes.isSuccess)
 
@@ -144,7 +147,7 @@ class SuperAdminSystemTest {
             rejectionReason = "",
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertFalse(duplicateRes.isSuccess)
     }
@@ -160,7 +163,7 @@ class SuperAdminSystemTest {
             rejectionReason = "ভুল ট্রানজ্যাকশন আইডি",
             actorUid = "super_admin_test",
             actorName = "টেস্ট সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(rejectRes.isSuccess)
 
@@ -190,7 +193,7 @@ class SuperAdminSystemTest {
             plan = updatedPlan,
             actorUid = "super_admin_test",
             actorName = "সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -211,7 +214,7 @@ class SuperAdminSystemTest {
             newSettings = newSettings,
             actorUid = "super_admin_test",
             actorName = "সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -221,8 +224,9 @@ class SuperAdminSystemTest {
     }
 
     @Test
-    fun `test jamesfashion792 is recognized as authorized super admin`() {
-        assertTrue(SuperAdminRepository.isSuperAdminEmail("jamesfashion792@gmail.com"))
+    fun `test unlisted emails like jamesfashion792 are revoked from super admin`() {
+        assertFalse(SuperAdminRepository.isSuperAdminEmail("jamesfashion792@gmail.com"))
+        assertTrue(SuperAdminRepository.isRevokedSuperAdminEmail("jamesfashion792@gmail.com"))
     }
 
     @Test
@@ -278,7 +282,7 @@ class SuperAdminSystemTest {
             note = "ভবিষ্যতের প্রো প্যাকেজ প্রস্তাবনা",
             actorUid = "super_admin_test",
             actorName = "সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
@@ -302,7 +306,7 @@ class SuperAdminSystemTest {
             effectiveDate = effectiveDate,
             actorUid = "super_admin_test",
             actorName = "সুপার এডমিন",
-            actorEmail = "buddavaibinodon@gmail.com"
+            actorEmail = "ataurgonee4@gmail.com"
         )
         assertTrue(res.isSuccess)
 
