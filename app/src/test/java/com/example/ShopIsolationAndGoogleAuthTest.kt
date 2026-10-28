@@ -374,12 +374,12 @@ class ShopIsolationAndGoogleAuthTest {
     fun `test GoogleSignInHelper signing fingerprints and Web Client ID alignment`() {
         assertEquals(
             "APK_SIGNING_SHA1 must match the actual debug.keystore SHA-1 certificate digest",
-            "EF:A5:A5:FC:CD:6F:9C:4C:59:FF:8D:70:03:25:74:32:B3:DC:26:19",
+            "65:C0:84:18:74:85:3F:BB:DA:A0:5D:E2:E7:7B:F1:E9:B7:E7:A2:04",
             GoogleSignInHelper.APK_SIGNING_SHA1
         )
         assertEquals(
             "APK_SIGNING_SHA256 must match the actual debug.keystore SHA-256 certificate digest",
-            "97:6E:B9:FB:70:29:E5:CD:16:20:EC:D2:C9:F6:5B:44:96:8B:F7:20:AB:7B:5F:E2:20:90:4C:57:65:CE:60:A8",
+            "BC:A6:BB:04:09:AC:3B:98:AA:C5:E0:FF:0F:39:DC:96:67:47:6F:C5:5A:69:85:E1:B4:8C:F6:AB:9E:8E:47:1C",
             GoogleSignInHelper.APK_SIGNING_SHA256
         )
         assertEquals(

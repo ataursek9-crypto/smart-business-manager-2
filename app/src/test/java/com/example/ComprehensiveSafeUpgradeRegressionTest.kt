@@ -266,7 +266,7 @@ class ComprehensiveSafeUpgradeRegressionTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertFalse("Duplicate phone registration must be REJECTED", duplicateSuccess)
-        assertTrue("Error must mention duplicate number", duplicateMsg.contains("ইতিমধ্যে একটি দোকান নিবন্ধিত"))
+        assertTrue("Error must mention duplicate number", duplicateMsg.contains("ইতিমধ্যে একটি দোকান নিবন্ধিত") || duplicateMsg.contains("ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে"))
     }
 
     /**

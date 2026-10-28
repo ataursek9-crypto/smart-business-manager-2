@@ -62,6 +62,7 @@ class RegistrationAndFirebaseAuditRepairTest {
         com.example.data.sync.CloudBusinessAuth.clear(app)
         superAdminRepo.resetStateForTesting()
         db.close()
+        AppDatabase.setInstanceForTesting(null)
         Dispatchers.resetMain()
     }
 
@@ -116,7 +117,7 @@ class RegistrationAndFirebaseAuditRepairTest {
     }
 
     @Test
-    fun testDuplicatePhoneRegistrationPrevention() = runTest {
+    fun testDuplicatePhoneRegistrationPrevention() = runTest(testDispatcher) {
         var result1Success = false
         var result1Msg = ""
         viewModel.registerNewShop(
@@ -132,6 +133,7 @@ class RegistrationAndFirebaseAuditRepairTest {
             result1Success = success
             result1Msg = msg
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
         assertTrue("First shop registration should succeed: $result1Msg", result1Success)
 
@@ -151,6 +153,7 @@ class RegistrationAndFirebaseAuditRepairTest {
             result2Success = success
             result2Msg = msg
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
         assertFalse("Second shop with duplicate phone must be rejected", result2Success)
         assertTrue("Error must mention duplicate account", result2Msg.contains("ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে"))

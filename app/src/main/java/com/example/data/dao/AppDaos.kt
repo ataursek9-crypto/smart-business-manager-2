@@ -58,6 +58,9 @@ interface UserDao {
 
     @Query("UPDATE users SET pinHash = :newPinHash WHERE id = :userId")
     suspend fun resetStaffPin(userId: String, newPinHash: String)
+
+    @Query("DELETE FROM users")
+    suspend fun deleteAllUsers()
 }
 
 @Dao
@@ -170,7 +173,7 @@ interface SaleDao {
     @Query("SELECT * FROM sales WHERE invoiceNumber = :invoiceNumber LIMIT 1")
     suspend fun getSaleByInvoice(invoiceNumber: String): Sale?
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSale(sale: Sale)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -233,7 +236,7 @@ interface PaymentReceiptDao {
     @Query("SELECT * FROM payments WHERE invoiceNumber = :invoiceNumber")
     suspend fun getReceiptsByInvoice(invoiceNumber: String): List<PaymentReceipt>
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertReceipt(receipt: PaymentReceipt)
 
     @Query("SELECT COUNT(*) FROM payments WHERE isDeleted = 0")

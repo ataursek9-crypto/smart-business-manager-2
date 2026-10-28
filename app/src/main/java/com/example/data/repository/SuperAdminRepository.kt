@@ -28,6 +28,9 @@ class SuperAdminRepository(
     companion object {
         private const val TAG = "SuperAdminRepo"
 
+        @Volatile
+        var disableFirebaseForTesting: Boolean = false
+
         // Explicitly authorized Super Admin Gmail accounts
         val AUTHORIZED_SUPER_ADMIN_EMAILS = setOf(
             "ataurgonee4@gmail.com",
@@ -304,6 +307,7 @@ class SuperAdminRepository(
     }
 
     fun isFirebaseConfigured(): Boolean {
+        if (disableFirebaseForTesting) return false
         return try {
             FirebaseApp.getApps(context).isNotEmpty()
         } catch (_: Exception) {
@@ -447,6 +451,7 @@ class SuperAdminRepository(
 
     @androidx.annotation.VisibleForTesting
     fun resetStateForTesting() {
+        disableFirebaseForTesting = true
         businessesListenerRegistration?.remove()
         businessesListenerRegistration = null
         _sharedBusinesses.value = emptyList()

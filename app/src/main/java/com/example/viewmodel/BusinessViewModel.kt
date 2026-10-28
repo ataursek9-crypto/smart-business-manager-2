@@ -1388,7 +1388,9 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
     private val _isSuperAdminSession = MutableStateFlow(false)
     val isSuperAdminSession: StateFlow<Boolean> = _isSuperAdminSession.asStateFlow()
     private val _superAdminVerifiedEmail = MutableStateFlow<String?>(null)
+    val superAdminVerifiedEmail: StateFlow<String?> = _superAdminVerifiedEmail.asStateFlow()
     private val _superAdminUid = MutableStateFlow<String?>(null)
+    val superAdminUid: StateFlow<String?> = _superAdminUid.asStateFlow()
 
     private val _currentGoogleEmail = MutableStateFlow<String?>(
         CloudBusinessAuth.getStoredAuthEmail(application)

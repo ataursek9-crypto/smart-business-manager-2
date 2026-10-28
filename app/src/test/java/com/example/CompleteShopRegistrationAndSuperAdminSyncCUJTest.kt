@@ -52,7 +52,7 @@ class CompleteShopRegistrationAndSuperAdminSyncCUJTest {
         superAdminRepo.resetStateForTesting()
         repo = BusinessRepository(db)
         viewModel = BusinessViewModel(app)
-        superAdminViewModel = SuperAdminViewModel(superAdminRepo)
+        superAdminViewModel = SuperAdminViewModel(app, superAdminRepo)
     }
 
     @After
@@ -62,6 +62,7 @@ class CompleteShopRegistrationAndSuperAdminSyncCUJTest {
         com.example.data.sync.CloudBusinessAuth.clear(app)
         superAdminRepo.resetStateForTesting()
         db.close()
+        AppDatabase.setInstanceForTesting(null)
         Dispatchers.resetMain()
     }
 
@@ -351,7 +352,11 @@ class CompleteShopRegistrationAndSuperAdminSyncCUJTest {
         val sale1 = Sale(
             invoiceNumber = invoiceNo,
             customerId = "cust_1",
+            customerName = "Customer 1",
+            customerPhone = "01700000001",
             salesmanId = "salesman_1",
+            salesmanName = "Salesman 1",
+            subtotal = 1500.0,
             totalAmount = 1500.0,
             paidAmount = 1500.0,
             dueAmount = 0.0,
@@ -375,8 +380,8 @@ class CompleteShopRegistrationAndSuperAdminSyncCUJTest {
         val shopA = "biz_tenant_a"
         val shopB = "biz_tenant_b"
 
-        val userA = User(id = "admin_a", name = "Admin A", phone = "01711111112", role = UserRole.ADMIN, shopId = shopA)
-        val userB = User(id = "admin_b", name = "Admin B", phone = "01722222223", role = UserRole.ADMIN, shopId = shopB)
+        val userA = User(id = "admin_a", name = "Admin A", phone = "01711111112", role = UserRole.ADMIN, pinHash = "pin_hash_a", shopId = shopA)
+        val userB = User(id = "admin_b", name = "Admin B", phone = "01722222223", role = UserRole.ADMIN, pinHash = "pin_hash_b", shopId = shopB)
 
         db.userDao().insertUser(userA)
         db.userDao().insertUser(userB)

@@ -50,8 +50,8 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    const val APK_SIGNING_SHA1 = "EF:A5:A5:FC:CD:6F:9C:4C:59:FF:8D:70:03:25:74:32:B3:DC:26:19"
-    const val APK_SIGNING_SHA256 = "97:6E:B9:FB:70:29:E5:CD:16:20:EC:D2:C9:F6:5B:44:96:8B:F7:20:AB:7B:5F:E2:20:90:4C:57:65:CE:60:A8"
+    const val APK_SIGNING_SHA1 = "65:C0:84:18:74:85:3F:BB:DA:A0:5D:E2:E7:7B:F1:E9:B7:E7:A2:04"
+    const val APK_SIGNING_SHA256 = "BC:A6:BB:04:09:AC:3B:98:AA:C5:E0:FF:0F:39:DC:96:67:47:6F:C5:5A:69:85:E1:B4:8C:F6:AB:9E:8E:47:1C"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 
@@ -142,7 +142,7 @@ object GoogleSignInHelper {
             if (resId != 0) {
                 context.getString(resId)
             } else {
-                context.getString(R.string.default_web_client_id)
+                DEFAULT_WEB_CLIENT_ID
             }
         } catch (_: Exception) {
             DEFAULT_WEB_CLIENT_ID
@@ -294,8 +294,26 @@ object GoogleSignInHelper {
                 }
             } catch (e: NoCredentialException) {
                 val exMsg = e.message ?: "No account credentials"
-                Log.w(TAG, "NoCredentialException: $exMsg")
-                onError("এই ডিভাইসে কোনো নিবন্ধিত গুগল অ্যাকাউন্ট পাওয়া যায়নি।\nঅনুগ্রহ করে ফোনের Settings > Accounts-এ গিয়ে একটি Google অ্যাকাউন্টে লগইন করুন।")
+                Log.w(TAG, "NoCredentialException: $exMsg. Attempting Firebase OAuth fallback...")
+                activity.runOnUiThread {
+                    launchFirebaseOAuthFallback(
+                        activity = activity,
+                        onAuthSuccess = onAuthSuccess,
+                        onCancelled = onCancelled,
+                        onError = { fallbackErr ->
+                            onError("গুগল সাইন-ইন সম্পন্ন করা যায়নি।\n\n" +
+                                    "সম্ভাব্য কারণ ও সমাধান:\n" +
+                                    "১. ফোনে কোনো Google অ্যাকাউন্ট লগইন নেই:\n" +
+                                    "   অনুগ্রহ করে ফোনের Settings > Accounts (বা Passwords & accounts)-এ গিয়ে একটি Google অ্যাকাউন্টে লগইন করুন।\n\n" +
+                                    "২. অথবা Firebase Console-এ বর্তমান APK-এর সাইনিং SHA-1 যুক্ত নেই:\n" +
+                                    "   • প্যাকেজ: ${context.packageName}\n" +
+                                    "   • সাইনিং SHA-1: $currentSha1\n" +
+                                    "   • Web Client ID: $clientId\n" +
+                                    "   Firebase Console > Project Settings > Your apps-এ এই SHA-1 ফিঙ্গারপ্রিন্ট যোগ থাকতে হবে।\n\n" +
+                                    "বিকল্প সাইন-ইন রিপোর্ট: $fallbackErr")
+                        }
+                    )
+                }
             } catch (e: androidx.credentials.exceptions.GetCredentialCustomException) {
                 val durationMs = System.currentTimeMillis() - startTime
                 val exType = e.type
