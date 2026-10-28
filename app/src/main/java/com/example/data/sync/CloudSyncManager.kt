@@ -382,9 +382,52 @@ class CloudSyncManager(
         val isOwner = isAuthorizedAdminEmail(email) ||
                 storedRole == UserRole.ADMIN.name
 
-        if (isOwner) {
-            CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
-            return authUser.uid
+        // Attempt remote lookup in Firestore businesses by ownerUid, ownerEmail or registered_phones
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+
+            // 2a. Query by ownerUid
+            val uidSnap = firestore.collection("businesses")
+                .whereEqualTo("ownerUid", authUser.uid)
+                .limit(1)
+                .get()
+                .awaitResult()
+            val uidDoc = uidSnap.documents.firstOrNull()
+            if (uidDoc != null && uidDoc.id.isNotBlank()) {
+                val foundBizId = uidDoc.id
+                CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
+                return foundBizId
+            }
+
+            // 2b. Query by ownerEmail
+            if (email.isNotBlank()) {
+                val emailSnap = firestore.collection("businesses")
+                    .whereEqualTo("ownerEmail", email)
+                    .limit(1)
+                    .get()
+                    .awaitResult()
+                val emailDoc = emailSnap.documents.firstOrNull()
+                if (emailDoc != null && emailDoc.id.isNotBlank()) {
+                    val foundBizId = emailDoc.id
+                    CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
+                    return foundBizId
+                }
+            }
+
+            // 2c. Query by phone if available
+            val phone = authUser.phoneNumber?.trim() ?: ""
+            if (phone.isNotBlank()) {
+                val phoneDoc = firestore.collection("registered_phones").document(phone).get().awaitResult()
+                if (phoneDoc.exists()) {
+                    val foundBizId = phoneDoc.getString("businessId")
+                    if (!foundBizId.isNullOrBlank()) {
+                        CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
+                        return foundBizId
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveOrFetchBusinessId remote businesses lookup non-fatal: ${e.message}")
         }
 
         // Attempt remote lookup in Firestore staff_memberships/{authUser.uid}
@@ -400,6 +443,11 @@ class CloudSyncManager(
                 }
             }
         } catch (_: Exception) {}
+
+        if (isOwner) {
+            CloudBusinessAuth.setStoredBusinessId(context, authUser.uid, role = UserRole.ADMIN.name)
+            return authUser.uid
+        }
 
         throw IllegalStateException("অননুমোদিত স্টাফ ডিভাইস: কোনো অনুমোদিত ক্লাউড বিজনেস আইডি পাওয়া যায়নি। অনুগ্রহ করে অ্যাডমিনের বিজনেস আইডি দিয়ে কানেক্ট করুন।")
     }

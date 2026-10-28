@@ -809,6 +809,10 @@ class BusinessRepository(
         db.userDao().insertUser(user)
     }
 
+    suspend fun saveCompanySettingsDirect(settings: CompanySettings) {
+        db.companySettingsDao().insertOrUpdate(settings)
+    }
+
     fun isAuthorizedAdminEmail(email: String): Boolean {
         return SuperAdminRepository.isSuperAdminEmail(email)
     }

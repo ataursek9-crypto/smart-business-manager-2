@@ -153,7 +153,7 @@ class RegistrationAndFirebaseAuditRepairTest {
         }
         testDispatcher.scheduler.advanceUntilIdle()
         assertFalse("Second shop with duplicate phone must be rejected", result2Success)
-        assertTrue("Error must mention duplicate phone", result2Msg.contains("ইতিমধ্যে একটি দোকান নিবন্ধিত"))
+        assertTrue("Error must mention duplicate account", result2Msg.contains("ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে"))
     }
 
     @Test
@@ -194,7 +194,7 @@ class RegistrationAndFirebaseAuditRepairTest {
         }
         testDispatcher.scheduler.advanceUntilIdle()
         assertFalse("Second shop with same authenticated owner UID must be rejected to prevent duplicate shops", result2Success)
-        assertTrue("Error must notify existing registered shop", result2Msg.contains("ইতিমধ্যে") && result2Msg.contains("দোকান নিবন্ধিত"))
+        assertTrue("Error must notify existing registered shop", result2Msg.contains("ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে"))
     }
 
     @Test

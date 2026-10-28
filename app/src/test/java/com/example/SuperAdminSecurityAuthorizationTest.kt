@@ -341,7 +341,7 @@ class SuperAdminSecurityAuthorizationTest {
     @Test
     fun `scenario 6 - logging out of Super Admin and logging into shopkeeper account completely clears Super Admin privileges`() = runTest(testDispatcher) {
         // Step A: Login as Super Admin
-        val superAdminEmail = "ataulgonee786@gmail.com"
+        val superAdminEmail = "ataurgonee4@gmail.com"
         viewModel.handleGoogleUserCredentials(
             uid = "super_admin_uid_786",
             email = superAdminEmail,

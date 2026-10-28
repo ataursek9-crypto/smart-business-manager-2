@@ -675,6 +675,11 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val isPhoneAuthorized = repository.isAuthorizedSuperAdminPhone(userPhone)
                 val isRevoked = !storedEmail.isNullOrBlank() && repository.isRevokedSuperAdminEmail(storedEmail)
 
+                // If this ViewModel instance has already authenticated a Super Admin session, preserve it!
+                if (_isSuperAdminSession.value) {
+                    return@launch
+                }
+
                 if (isStoredSuperAdmin && !isRevoked && (isEmailAuthorized || isPhoneAuthorized)) {
                     val verifiedIdentifier = if (isEmailAuthorized) storedEmail!! else userPhone
                     val uid = authUser?.uid ?: "superadmin_${verifiedIdentifier.replace('@', '_').replace('.', '_').replace('+', '_')}"
@@ -710,23 +715,29 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         _currentUser.value = superAdminUser
                     } else {
                         // User revoked or inactive
+                        if (!_isSuperAdminSession.value) {
+                            _isSuperAdminSession.value = false
+                            _superAdminVerifiedEmail.value = null
+                            _superAdminUid.value = null
+                            CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
+                        }
+                    }
+                } else {
+                    if (!_isSuperAdminSession.value) {
                         _isSuperAdminSession.value = false
                         _superAdminVerifiedEmail.value = null
                         _superAdminUid.value = null
                         CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
                     }
-                } else {
+                }
+            } catch (e: Exception) {
+                Log.w("BusinessViewModel", "Session auto-restore note: ${e.message}")
+                if (!_isSuperAdminSession.value) {
                     _isSuperAdminSession.value = false
                     _superAdminVerifiedEmail.value = null
                     _superAdminUid.value = null
                     CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
                 }
-            } catch (e: Exception) {
-                Log.w("BusinessViewModel", "Session auto-restore note: ${e.message}")
-                _isSuperAdminSession.value = false
-                _superAdminVerifiedEmail.value = null
-                _superAdminUid.value = null
-                CloudBusinessAuth.setStoredSuperAdminFlag(application, false)
             }
         }
         viewModelScope.launch {
@@ -1095,14 +1106,14 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 } || (superAdminViewModel?.rawBusinesses?.value?.any { it.ownerPhone == normalizedPhone } == true)
 
                 if (existingInSuperAdmin) {
-                    onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
+                    onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", null)
                     return@launch
                 }
 
                 if (superAdminRepo.isFirebaseConfigured()) {
                     val isAlreadyRegistered = superAdminRepo.checkPhoneRegisteredRemote(normalizedPhone)
                     if (isAlreadyRegistered) {
-                        onResult(false, "এই মোবাইল নম্বর ($normalizedPhone) দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে!", null)
+                        onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", null)
                         return@launch
                     }
                 }
@@ -1112,10 +1123,10 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val effectiveOwnerUid = if (ownerUid.isNotBlank()) ownerUid else (currentAuth?.uid ?: "")
                 val effectiveEmail = if (ownerEmail.isNotBlank()) ownerEmail else (currentAuth?.email ?: "")
 
-                if (effectiveOwnerUid.isNotBlank() || effectiveEmail.isNotBlank()) {
-                    val existingBiz = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail)
+                if (effectiveOwnerUid.isNotBlank() || effectiveEmail.isNotBlank() || normalizedPhone.isNotBlank()) {
+                    val existingBiz = superAdminRepo.findBusinessByOwner(effectiveOwnerUid, effectiveEmail, normalizedPhone)
                     if (existingBiz != null) {
-                        onResult(false, "আপনার এই অ্যাকাউন্টে ইতিমধ্যে '${existingBiz.businessName}' নামের একটি দোকান নিবন্ধিত রয়েছে! পুনরায় নতুন দোকান নিবন্ধনের প্রয়োজন নেই।", existingBiz.id)
+                        onResult(false, "এই Gmail বা ফোন নম্বর দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট তৈরি করা হয়েছে। নতুন দোকান তৈরি না করে আগের অ্যাকাউন্টে লগইন করুন।", existingBiz.id)
                         return@launch
                     }
                 }
@@ -1252,7 +1263,34 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
 
-            val user = repository.getUserByPhone(cleanPhone)
+            var user = repository.getUserByPhone(cleanPhone)
+            if (user == null) {
+                // Check if this phone is registered on Cloud Firestore (Cross-device phone retrieval)
+                val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
+                val cloudBiz = superAdminRepo.findBusinessByOwner("", "", cleanPhone)
+                if (cloudBiz != null) {
+                    val adminUser = User(
+                        id = cloudBiz.ownerUid.ifBlank { "admin_${System.currentTimeMillis()}" },
+                        name = cloudBiz.ownerName.ifBlank { "দোকান মালিক" },
+                        phone = cleanPhone,
+                        role = UserRole.ADMIN,
+                        pinHash = repository.hashPin("1234"),
+                        isActive = true,
+                        accountStatus = UserAccountStatus.ACTIVE,
+                        shopId = cloudBiz.id
+                    )
+                    repository.saveUserDirect(adminUser)
+                    val settings = CompanySettings(
+                        id = 1,
+                        businessName = cloudBiz.businessName,
+                        phone = cleanPhone,
+                        address = cloudBiz.address.ifBlank { cloudBiz.district.ifBlank { "বাংলাদেশ" } }
+                    )
+                    repository.saveCompanySettingsDirect(settings)
+                    user = adminUser
+                }
+            }
+
             if (user == null) {
                 onResult(false, "এই মোবাইল নম্বরে কোনো অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে আগে নতুন দোকান রেজিস্ট্রেশন করুন।", null)
                 return@launch
@@ -1528,11 +1566,11 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 repository.getUserById(linkedUserId)
             } else null
 
-            // 3. If not found, check SuperAdminRepository businesses matching ownerEmail or ownerUid
+            // 3. If not found, check SuperAdminRepository businesses matching ownerEmail or ownerUid or phone
             var resolvedShopId = linkedShopId ?: ""
             if (resolvedUser == null) {
                 val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
-                val matchedBiz = superAdminRepo.findBusinessByOwner(uid, cleanEmail)
+                val matchedBiz = superAdminRepo.findBusinessByOwner(uid, cleanEmail, phone)
                 if (matchedBiz != null) {
                     resolvedShopId = matchedBiz.id
                     if (matchedBiz.ownerPhone.isNotBlank()) {
@@ -1553,6 +1591,13 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             shopId = matchedBiz.id
                         )
                         repository.saveUserDirect(adminUser)
+                        val settings = CompanySettings(
+                            id = 1,
+                            businessName = matchedBiz.businessName,
+                            phone = matchedBiz.ownerPhone,
+                            address = matchedBiz.address.ifBlank { matchedBiz.district.ifBlank { "বাংলাদেশ" } }
+                        )
+                        repository.saveCompanySettingsDirect(settings)
                         resolvedUser = adminUser
                     }
                 }

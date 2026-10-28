@@ -40,6 +40,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.OAuthProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -49,9 +50,8 @@ object GoogleSignInHelper {
 
     // Real SHA-1 and SHA-256 certificate fingerprints for this APK signed by debug.keystore
     // Verified using: keytool -list -v -keystore debug.keystore -alias androiddebugkey
-    // and apksigner verify --verbose --print-certs app-debug.apk
-    const val APK_SIGNING_SHA1 = "B4:F3:6C:65:C4:65:C9:22:00:43:5D:34:5C:E4:67:DC:FA:89:F8:C5"
-    const val APK_SIGNING_SHA256 = "8F:23:9A:56:F0:45:68:90:F4:9C:EC:CD:C8:90:B7:8D:6F:1E:0D:71:98:F2:2D:3E:31:82:DD:BA:75:99:BF:54"
+    const val APK_SIGNING_SHA1 = "EF:A5:A5:FC:CD:6F:9C:4C:59:FF:8D:70:03:25:74:32:B3:DC:26:19"
+    const val APK_SIGNING_SHA256 = "97:6E:B9:FB:70:29:E5:CD:16:20:EC:D2:C9:F6:5B:44:96:8B:F7:20:AB:7B:5F:E2:20:90:4C:57:65:CE:60:A8"
     const val DEFAULT_WEB_CLIENT_ID = "484040397249-h2tfr5q8pgu65ncl9fgaslcbdsvj9kkj.apps.googleusercontent.com"
     const val APPLICATION_ID = "com.aistudio.smartbiz.mgr"
 
@@ -149,6 +149,60 @@ object GoogleSignInHelper {
         }
     }
 
+    fun findActivity(context: Context): Activity? {
+        var currentContext: Context? = context
+        while (currentContext is android.content.ContextWrapper) {
+            if (currentContext is Activity) {
+                return currentContext
+            }
+            currentContext = currentContext.baseContext
+        }
+        return null
+    }
+
+    fun launchFirebaseOAuthFallback(
+        activity: Activity,
+        onAuthSuccess: (FirebaseUser) -> Unit,
+        onCancelled: (() -> Unit)? = null,
+        onError: (String) -> Unit
+    ) {
+        Log.i(TAG, "Initiating Firebase OAuthProvider fallback for Google Sign-In")
+        val provider = OAuthProvider.newBuilder("google.com")
+        val auth = FirebaseAuth.getInstance()
+
+        auth.startActivityForSignInWithProvider(activity, provider.build())
+            .addOnSuccessListener { authResult ->
+                val user = authResult.user
+                if (user != null) {
+                    Log.i(TAG, "Firebase OAuthProvider fallback success: uid=${user.uid}, email=${user.email}")
+                    onAuthSuccess(user)
+                } else {
+                    onError("ফায়ারবেস ব্যবহারকারী সেশন শুরু করা সম্ভব হয়নি।")
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Firebase OAuthProvider fallback failure: ${e.message}", e)
+                val exMsg = e.localizedMessage ?: e.message ?: ""
+                val isCancelled = exMsg.contains("cancel", ignoreCase = true) ||
+                        (e is com.google.firebase.auth.FirebaseAuthException && e.errorCode == "ERROR_WEB_CONTEXT_CANCELED")
+                if (isCancelled) {
+                    if (onCancelled != null) {
+                        onCancelled()
+                    } else {
+                        onError("গুগল সাইন-ইন উইন্ডো বন্ধ করা হয়েছে।")
+                    }
+                } else if (e is com.google.firebase.FirebaseNetworkException) {
+                    onError("ইন্টারনেট সংযোগে সমস্যা হচ্ছে। আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।")
+                } else {
+                    val currentSha1 = getSigningSha1(activity)
+                    onError("বিকল্প গুগল সাইন-ইন সম্পন্ন করা যায়নি: $exMsg\n\n" +
+                            "Firebase Console-এ এই অ্যাপের সাইনিং SHA-1 যুক্ত থাকা নিশ্চিত করুন:\n" +
+                            "• SHA-1: $currentSha1\n" +
+                            "• Package: ${activity.packageName}")
+                }
+            }
+    }
+
     fun launchGoogleSignIn(
         context: Context,
         scope: CoroutineScope,
@@ -156,7 +210,7 @@ object GoogleSignInHelper {
         onCancelled: (() -> Unit)? = null,
         onError: (String) -> Unit
     ) {
-        val activity = context as? Activity
+        val activity = findActivity(context)
         if (activity == null) {
             onError("সিস্টেম ত্রুটি: অ্যাক্টিভিটি পাওয়া যায়নি")
             return
@@ -173,7 +227,6 @@ object GoogleSignInHelper {
         Log.i(TAG, "Initiating Google Sign-In with serverClientId=$clientId, package=${context.packageName}, sha1=$currentSha1")
 
         val credentialManager = CredentialManager.create(context)
-        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
         val googleIdOption = GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(false)
             .setServerClientId(clientId)
@@ -181,7 +234,6 @@ object GoogleSignInHelper {
             .build()
 
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInWithGoogleOption)
             .addCredentialOption(googleIdOption)
             .build()
 
@@ -269,11 +321,15 @@ object GoogleSignInHelper {
                     onError("গুগল সাইন-ইন সার্ভিস ত্রুটি: $exType\nবিবরণ: $exMsg")
                 }
             } catch (e: androidx.credentials.exceptions.GetCredentialProviderConfigurationException) {
-                Log.e(TAG, "GetCredentialProviderConfigurationException: ${e.message}")
-                onError("ক্রেডেনশিয়াল প্রোভাইডার কনফিগারেশনে সমস্যা হয়েছে। অনুগ্রহ করে ডিভাইসের গুগল প্লে সার্ভিস আপডেট করুন।")
+                Log.w(TAG, "GetCredentialProviderConfigurationException: ${e.message}. Falling back to Firebase OAuthProvider...")
+                activity.runOnUiThread {
+                    launchFirebaseOAuthFallback(activity, onAuthSuccess, onCancelled, onError)
+                }
             } catch (e: androidx.credentials.exceptions.GetCredentialUnsupportedException) {
-                Log.e(TAG, "GetCredentialUnsupportedException: ${e.message}")
-                onError("এই ডিভাইসে Google Credential Manager সমর্থিত নয়।")
+                Log.w(TAG, "GetCredentialUnsupportedException: ${e.message}. Falling back to Firebase OAuthProvider...")
+                activity.runOnUiThread {
+                    launchFirebaseOAuthFallback(activity, onAuthSuccess, onCancelled, onError)
+                }
             } catch (e: androidx.credentials.exceptions.GetCredentialInterruptedException) {
                 Log.w(TAG, "GetCredentialInterruptedException: ${e.message}")
                 if (onCancelled != null) {

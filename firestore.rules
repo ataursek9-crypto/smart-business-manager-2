@@ -231,8 +231,17 @@ service cloud.firestore {
 
     // Business Scope Root
     match /businesses/{businessId} {
-      allow get: if isSuperAdmin() || (isSignedIn() && (isBusinessStaff(businessId) || (resource != null && resource.data.ownerUid == request.auth.uid)));
-      allow list: if isSuperAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow get: if isSuperAdmin() || (isSignedIn() && (
+        isBusinessStaff(businessId) ||
+        (resource != null && (
+          resource.data.ownerUid == request.auth.uid ||
+          (request.auth.token.email != null && 'ownerEmail' in resource.data && resource.data.ownerEmail == request.auth.token.email.lower())
+        ))
+      ));
+      allow list: if isSuperAdmin() || (isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        (request.auth.token.email != null && 'ownerEmail' in resource.data && resource.data.ownerEmail == request.auth.token.email.lower())
+      ));
       allow create: if isSuperAdmin() || (
         isSignedIn() && (
           request.auth.uid == businessId ||
@@ -332,12 +341,7 @@ service cloud.firestore {
 
     // 11. Registered phones index - strictly protected against scraping
     match /registered_phones/{phone} {
-      allow get: if isSuperAdmin() || (
-        isSignedIn() &&
-        resource != null &&
-        'businessId' in resource.data &&
-        isBusinessStaff(resource.data.businessId)
-      );
+      allow get: if isSignedIn();
       allow list: if isSuperAdmin();
       allow create: if isSignedIn() && phone.size() >= 5 && phone.size() <= 30 &&
                        incoming().phone == phone && incoming().businessId is string &&

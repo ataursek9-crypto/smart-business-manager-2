@@ -1176,52 +1176,87 @@ fun ShopRegistrationScreen(
         }
     }
 
-    // Success Dialog on Successful Registration
+    // Success Dialog on Successful Registration (Rendered ONLY after verified cloud write)
     successRegisteredShopId?.let { shopId ->
+        val registeredIdentifier = if (authenticatedGoogleUser?.email != null && !authenticatedGoogleUser?.email.isNullOrBlank()) {
+            authenticatedGoogleUser?.email ?: ""
+        } else {
+            val rawPhone = phone.trim()
+            if (rawPhone.length >= 7) rawPhone.take(3) + "*****" + rawPhone.takeLast(3) else rawPhone
+        }
+
         AlertDialog(
             onDismissRequest = { /* user must tap continue */ },
             icon = {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = Color(0xFF2E7D32),
-                    modifier = Modifier.size(48.dp)
+                    tint = Color(0xFF16A34A),
+                    modifier = Modifier.size(52.dp)
                 )
             },
             title = {
                 Text(
-                    text = "অভিনন্দন! রেজিস্ট্রেশন সম্পন্ন",
+                    text = "🎉 অভিনন্দন! আপনার অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।",
                     fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center,
+                    color = PrimaryNavy
                 )
             },
             text = {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "আপনার দোকান '${shopName.trim()}' সফলভাবে নিবন্ধিত হয়েছে।",
+                        text = "Smart Business Manager-এ আপনাকে স্বাগতম। আপনার দোকানের অ্যাকাউন্ট তৈরি হয়েছে। এখন আপনি আপনার দোকানের পণ্য, বিক্রি ও ব্যবসার হিসাব পরিচালনা করতে পারবেন।",
                         style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center
+                        color = Color(0xFF334155),
+                        textAlign = TextAlign.Center,
+                        lineHeight = 20.sp
                     )
+
                     Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFF1F5F9),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("ইউনিক বিজনেস কোড: $shopId", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text("লগইন নম্বর: ${phone.trim()}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text("প্ল্যান: সম্পূর্ণ ফ্রি ব্যবহার (আজীবন)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1B5E20))
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("দোকানের নাম:", fontSize = 12.sp, color = Color(0xFF64748B))
+                                Text(shopName.trim(), fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0F172A))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("নিবন্ধিত অ্যাকাউন্ট:", fontSize = 12.sp, color = Color(0xFF64748B))
+                                Text(registeredIdentifier, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = PrimaryNavy)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("অ্যাকাউন্ট স্ট্যাটাস:", fontSize = 12.sp, color = Color(0xFF64748B))
+                                Text("সক্রিয় (সম্পূর্ণ ফ্রি ব্যবহার)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF15803D))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("দোকান কোড (ID):", fontSize = 11.sp, color = Color(0xFF64748B))
+                                Text(shopId, fontSize = 11.sp, color = Color(0xFF475569))
+                            }
                         }
                     }
-                    Text(
-                        text = "আপনার দোকানটি ক্লাউড ডাটাবেস ও প্ল্যাটফর্ম সুপার এডমিন কনসোলের সঙ্গে সংযুক্ত হয়েছে। আপনি এখনই সম্পূর্ণ বিনামূল্যে আপনার দোকানের বেচাকেনা পরিচালনা শুরু করতে পারেন।",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
                 }
             },
             confirmButton = {
@@ -1230,12 +1265,16 @@ fun ShopRegistrationScreen(
                         successRegisteredShopId = null
                         onRegistrationSuccess()
                     },
-                    modifier = Modifier.fillMaxWidth().testTag("reg_success_continue_button"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("reg_success_continue_button"),
+                    shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryNavy)
                 ) {
-                    Icon(Icons.Default.Dashboard, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("এডমিন ড্যাশবোর্ডে প্রবেশ করুন")
+                    Text("আমার দোকানে প্রবেশ করুন", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
             }
         )

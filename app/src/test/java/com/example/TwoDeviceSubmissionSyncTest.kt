@@ -702,10 +702,10 @@ class TwoDeviceSubmissionSyncTest {
     // 10. Verify admin email ataur50305@gmail.com authorization and Cloud Submission schema integrity
     @Test
     fun testAdminEmailAuthorizationAndCloudSubmissionSchemaIntegrity() = runTest(testDispatcher) {
-        val adminEmail = "ataur50305@gmail.com"
-        assertTrue("CloudSyncManager must recognize ataur50305@gmail.com as authorized admin", CloudSyncManager.isAuthorizedAdminEmail(adminEmail))
+        val adminEmail = "ataurgonee4@gmail.com"
+        assertTrue("CloudSyncManager must recognize ataurgonee4@gmail.com as authorized admin", CloudSyncManager.isAuthorizedAdminEmail(adminEmail))
         val adminRepo = BusinessRepository(adminDb)
-        assertTrue("BusinessRepository must recognize ataur50305@gmail.com as authorized admin", adminRepo.isAuthorizedAdminEmail(adminEmail))
+        assertTrue("BusinessRepository must recognize ataurgonee4@gmail.com as authorized admin", adminRepo.isAuthorizedAdminEmail(adminEmail))
 
         // Verify Product Submission Cloud Document Map matches firestore.rules
         val testSub = ProductSubmission(

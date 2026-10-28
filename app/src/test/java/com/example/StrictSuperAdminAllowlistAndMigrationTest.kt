@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.AppDatabase
 import com.example.data.model.*
@@ -9,9 +10,12 @@ import com.example.data.repository.SuperAdminRepository
 import com.example.viewmodel.BusinessViewModel
 import com.example.viewmodel.SuperAdminTab
 import com.example.viewmodel.SuperAdminViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -35,19 +39,33 @@ class StrictSuperAdminAllowlistAndMigrationTest {
 
     @Before
     fun setUp() {
+        kotlinx.coroutines.Dispatchers.setMain(testDispatcher)
         application = ApplicationProvider.getApplicationContext()
-        database = AppDatabase.getDatabase(application)
-        repository = BusinessRepository(database, application)
+        com.example.data.sync.CloudBusinessAuth.clear(application)
+        try { com.google.firebase.auth.FirebaseAuth.getInstance().signOut() } catch (_: Exception) {}
+        val directExecutor = java.util.concurrent.Executor { it.run() }
+        database = Room.inMemoryDatabaseBuilder(application, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .setQueryExecutor(directExecutor)
+            .setTransactionExecutor(directExecutor)
+            .build()
+        AppDatabase.setInstanceForTesting(database)
+        repository = BusinessRepository(database)
         superAdminRepo = SuperAdminRepository.getInstance(application)
         superAdminRepo.resetStateForTesting()
 
-        viewModel = BusinessViewModel(application, repository, testDispatcher)
+        viewModel = BusinessViewModel(application)
         superAdminViewModel = SuperAdminViewModel(application, superAdminRepo)
     }
 
     @After
     fun tearDown() {
+        com.example.data.sync.CloudBusinessAuth.clear(application)
+        try { com.google.firebase.auth.FirebaseAuth.getInstance().signOut() } catch (_: Exception) {}
         superAdminRepo.resetStateForTesting()
+        AppDatabase.setInstanceForTesting(null)
+        database.close()
+        kotlinx.coroutines.Dispatchers.resetMain()
     }
 
     @Test
@@ -184,7 +202,9 @@ class StrictSuperAdminAllowlistAndMigrationTest {
             registeredShopId = shopId
         }
 
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertTrue("Shop registration must succeed", regSuccess)
         assertNotNull("Registered shop ID must not be null", registeredShopId)
@@ -217,6 +237,7 @@ class StrictSuperAdminAllowlistAndMigrationTest {
 
         // 1. Register shop
         var regSuccess = false
+        var regMsg: String? = null
         var createdShopId: String? = null
         viewModel.registerNewShop(
             shopName = shopName,
@@ -230,12 +251,15 @@ class StrictSuperAdminAllowlistAndMigrationTest {
             ownerEmail = googleEmail,
             ownerUid = googleUid,
             superAdminViewModel = superAdminViewModel
-        ) { success, _, shopId ->
+        ) { success, msg, shopId ->
             regSuccess = success
+            regMsg = msg
             createdShopId = shopId
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
-        assertTrue(regSuccess)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertTrue("Registration failed: $regMsg", regSuccess)
 
         // 2. Simulate logging in with Google credentials
         var loginSuccess: Boolean? = null
@@ -249,7 +273,9 @@ class StrictSuperAdminAllowlistAndMigrationTest {
             loginSuccess = success
             resolvedRole = role
         }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         testDispatcher.scheduler.advanceUntilIdle()
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
 
         assertTrue("Google Sign-In should successfully log into shopkeeper's store", loginSuccess == true)
         assertEquals("Role must be regular store ADMIN, not platform super admin", UserRole.ADMIN, resolvedRole)

@@ -608,6 +608,7 @@ class SuperAdminRepository(
                     val remoteList = snapshot.documents.mapNotNull { doc -> parseBusinessDoc(doc) }
                     if (remoteList.isNotEmpty()) {
                         val current = _businesses.value.toMutableList()
+                        current.removeAll { it.id == "biz_fashion_house_2" || it.id == "biz_dhaka_traders_3" }
                         remoteList.forEach { remote ->
                             val idx = current.indexOfFirst {
                                 it.id == remote.id || (it.ownerPhone == remote.ownerPhone && remote.ownerPhone.isNotBlank())
@@ -701,17 +702,24 @@ class SuperAdminRepository(
 
     private fun initRemoteListeners() {
         if (!isFirebaseConfigured()) return
-        scope.launch {
-            try {
-                val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        try {
+            FirebaseAuth.getInstance().addAuthStateListener { auth ->
+                val authUser = auth.currentUser
                 val currentEmail = authUser?.email?.trim()?.lowercase() ?: ""
                 val currentPhone = authUser?.phoneNumber?.trim() ?: ""
                 if (authUser != null && isSuperAdminIdentity(currentEmail, currentPhone)) {
                     startRemoteListeners()
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "initRemoteListeners note: ${e.message}")
             }
+            // Also run once synchronously for current state if already authenticated
+            val authUser = try { FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+            val currentEmail = authUser?.email?.trim()?.lowercase() ?: ""
+            val currentPhone = authUser?.phoneNumber?.trim() ?: ""
+            if (authUser != null && isSuperAdminIdentity(currentEmail, currentPhone)) {
+                startRemoteListeners()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "initRemoteListeners note: ${e.message}")
         }
     }
 
@@ -1061,22 +1069,26 @@ class SuperAdminRepository(
     suspend fun checkPhoneRegisteredRemote(phone: String): Boolean {
         if (!isFirebaseConfigured() || phone.isBlank()) return false
         return try {
-            val doc = FirebaseFirestore.getInstance().collection("registered_phones").document(phone).get().await()
-            doc.exists()
+            kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                val doc = FirebaseFirestore.getInstance().collection("registered_phones").document(phone).get().await()
+                doc.exists()
+            } ?: false
         } catch (e: Exception) {
             Log.w(TAG, "checkPhoneRegisteredRemote check error: ${e.message}")
             false
         }
     }
 
-    suspend fun findBusinessByOwner(ownerUid: String, ownerEmail: String = ""): PlatformBusiness? {
+    suspend fun findBusinessByOwner(ownerUid: String, ownerEmail: String = "", phone: String = ""): PlatformBusiness? {
         val cleanUid = ownerUid.trim()
         val cleanEmail = ownerEmail.trim().lowercase()
+        val cleanPhone = phone.trim()
 
         // 1. Check in-memory state
         val localMatch = _businesses.value.firstOrNull {
             (cleanUid.isNotBlank() && it.ownerUid == cleanUid) ||
-            (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true))
+            (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true)) ||
+            (cleanPhone.isNotBlank() && it.ownerPhone == cleanPhone)
         }
         if (localMatch != null) return localMatch
 
@@ -1103,6 +1115,34 @@ class SuperAdminRepository(
                         .get()
                         .await()
                     val foundDoc = querySnapEmail.documents.firstOrNull()
+                    if (foundDoc != null) {
+                        val parsed = parseBusinessDoc(foundDoc)
+                        if (parsed != null) return parsed
+                    }
+                }
+                if (cleanPhone.isNotBlank()) {
+                    // Check registered_phones index first
+                    try {
+                        val phoneDoc = firestore.collection("registered_phones").document(cleanPhone).get().await()
+                        if (phoneDoc.exists()) {
+                            val bizId = phoneDoc.getString("businessId")
+                            if (!bizId.isNullOrBlank()) {
+                                val bizDoc = firestore.collection("businesses").document(bizId).get().await()
+                                if (bizDoc.exists()) {
+                                    val parsed = parseBusinessDoc(bizDoc)
+                                    if (parsed != null) return parsed
+                                }
+                            }
+                        }
+                    } catch (pe: Exception) {
+                        Log.w(TAG, "findBusinessByOwner phoneDoc lookup note: ${pe.message}")
+                    }
+                    val querySnapPhone = firestore.collection("businesses")
+                        .whereEqualTo("ownerPhone", cleanPhone)
+                        .limit(1)
+                        .get()
+                        .await()
+                    val foundDoc = querySnapPhone.documents.firstOrNull()
                     if (foundDoc != null) {
                         val parsed = parseBusinessDoc(foundDoc)
                         if (parsed != null) return parsed
@@ -1156,25 +1196,33 @@ class SuperAdminRepository(
                     data["scheduledPolicyEffectiveAt"] = business.scheduledPolicyEffectiveAt
                 }
 
-                firestore.collection("businesses").document(business.id)
-                    .set(data, SetOptions.merge()).await()
+                val writeSuccess = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                    firestore.collection("businesses").document(business.id)
+                        .set(data, SetOptions.merge()).await()
 
-                // 2. Index the registered phone in registered_phones collection for cross-device duplicate detection
-                if (cleanPhone.isNotBlank()) {
-                    val phoneDocData = mapOf(
-                        "phone" to cleanPhone,
-                        "businessId" to business.id,
-                        "businessName" to business.businessName,
-                        "ownerName" to business.ownerName,
-                        "ownerUid" to business.ownerUid,
-                        "createdAt" to business.createdAt
-                    )
-                    try {
-                        firestore.collection("registered_phones").document(cleanPhone)
-                            .set(phoneDocData, SetOptions.merge()).await()
-                    } catch (pe: Exception) {
-                        Log.w(TAG, "registered_phones indexing non-fatal: ${pe.message}")
+                    // 2. Index the registered phone in registered_phones collection for cross-device duplicate detection
+                    if (cleanPhone.isNotBlank()) {
+                        val phoneDocData = mapOf(
+                            "phone" to cleanPhone,
+                            "businessId" to business.id,
+                            "businessName" to business.businessName,
+                            "ownerName" to business.ownerName,
+                            "ownerUid" to business.ownerUid,
+                            "createdAt" to business.createdAt
+                        )
+                        try {
+                            firestore.collection("registered_phones").document(cleanPhone)
+                                .set(phoneDocData, SetOptions.merge()).await()
+                        } catch (pe: Exception) {
+                            Log.w(TAG, "registered_phones indexing non-fatal: ${pe.message}")
+                        }
                     }
+                    true
+                }
+                if (writeSuccess == null) {
+                    val timeoutMsg = "সার্ভারে দোকান সংরক্ষণে সময় বেশি লেগেছে (টাইমআউট)। অনুগ্রহ করে ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।"
+                    Log.e(TAG, "registerNewShop timeout: $timeoutMsg")
+                    return Result.failure(java.util.concurrent.TimeoutException(timeoutMsg))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "registerNewShop server save failed: ${e.message}", e)
