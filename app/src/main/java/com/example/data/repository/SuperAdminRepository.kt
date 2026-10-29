@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import android.util.Log
 import com.example.data.model.*
+import com.example.data.sync.CloudBusinessAuth
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -1090,27 +1091,42 @@ class SuperAdminRepository(
      */
     suspend fun checkPhoneRegisteredRemote(phone: String): Boolean {
         if (!isFirebaseConfigured() || phone.isBlank()) return false
-        return try {
-            kotlinx.coroutines.withTimeoutOrNull(2500L) {
-                val doc = FirebaseFirestore.getInstance().collection("registered_phones").document(phone).get().await()
-                doc.exists()
-            } ?: false
-        } catch (e: Exception) {
-            Log.w(TAG, "checkPhoneRegisteredRemote check error: ${e.message}")
-            false
+        val localPhone = CloudBusinessAuth.normalizePhone(phone)
+        val e164Phone = CloudBusinessAuth.normalizeToE164(phone)
+        val candidates = listOf(localPhone, e164Phone, phone.trim()).distinct().filter { it.isNotBlank() }
+        val firestore = FirebaseFirestore.getInstance()
+        for (candidate in candidates) {
+            try {
+                val exists = kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                    val doc = firestore.collection("registered_phones").document(candidate).get().await()
+                    doc.exists()
+                } ?: false
+                if (exists) return true
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                if (msg.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                    // Document exists in registered_phones and is access-restricted by security rules
+                    return true
+                }
+                Log.w(TAG, "checkPhoneRegisteredRemote check note: ${e.message}")
+            }
         }
+        return false
     }
 
     suspend fun findBusinessByOwner(ownerUid: String, ownerEmail: String = "", phone: String = ""): PlatformBusiness? {
         val cleanUid = ownerUid.trim()
         val cleanEmail = ownerEmail.trim().lowercase()
-        val cleanPhone = phone.trim()
+        val localPhone = if (phone.isNotBlank()) CloudBusinessAuth.normalizePhone(phone) else ""
+        val e164Phone = if (phone.isNotBlank()) CloudBusinessAuth.normalizeToE164(phone) else ""
+        val rawPhone = phone.trim()
 
         // 1. Check in-memory state
         val localMatch = _businesses.value.firstOrNull {
             (cleanUid.isNotBlank() && (it.id == cleanUid || it.ownerUid == cleanUid)) ||
             (cleanEmail.isNotBlank() && it.ownerEmail.equals(cleanEmail, ignoreCase = true)) ||
-            (cleanPhone.isNotBlank() && (it.ownerPhone == cleanPhone || it.ownerPhone.endsWith(cleanPhone.takeLast(10))))
+            (localPhone.isNotBlank() && CloudBusinessAuth.matchesPhone(it.ownerPhone, localPhone)) ||
+            (rawPhone.isNotBlank() && (it.ownerPhone == rawPhone || it.ownerPhone.endsWith(rawPhone.takeLast(10))))
         }
         if (localMatch != null) return localMatch
 
@@ -1119,7 +1135,7 @@ class SuperAdminRepository(
             try {
                 val firestore = FirebaseFirestore.getInstance()
                 if (cleanUid.isNotBlank()) {
-                    // Direct lookup by document ID (supports UID-keyed business docs like PBknnhTZ1LNZsNBb9dpAOInpRmt1)
+                    // Direct lookup by document ID (supports UID-keyed business docs)
                     try {
                         val directDoc = firestore.collection("businesses").document(cleanUid).get().await()
                         if (directDoc.exists()) {
@@ -1130,55 +1146,86 @@ class SuperAdminRepository(
                         Log.w(TAG, "findBusinessByOwner direct doc lookup note: ${e.message}")
                     }
 
-                    val querySnap = firestore.collection("businesses")
-                        .whereEqualTo("ownerUid", cleanUid)
-                        .limit(1)
-                        .get()
-                        .await()
-                    val foundDoc = querySnap.documents.firstOrNull()
-                    if (foundDoc != null) {
-                        val parsed = parseBusinessDoc(foundDoc)
-                        if (parsed != null) return parsed
+                    try {
+                        val querySnap = firestore.collection("businesses")
+                            .whereEqualTo("ownerUid", cleanUid)
+                            .limit(1)
+                            .get()
+                            .await()
+                        val foundDoc = querySnap.documents.firstOrNull()
+                        if (foundDoc != null) {
+                            val parsed = parseBusinessDoc(foundDoc)
+                            if (parsed != null) return parsed
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "findBusinessByOwner query ownerUid note: ${e.message}")
                     }
                 }
                 if (cleanEmail.isNotBlank()) {
-                    val querySnapEmail = firestore.collection("businesses")
-                        .whereEqualTo("ownerEmail", cleanEmail)
-                        .limit(1)
-                        .get()
-                        .await()
-                    val foundDoc = querySnapEmail.documents.firstOrNull()
-                    if (foundDoc != null) {
-                        val parsed = parseBusinessDoc(foundDoc)
-                        if (parsed != null) return parsed
+                    try {
+                        val querySnapEmail = firestore.collection("businesses")
+                            .whereEqualTo("ownerEmail", cleanEmail)
+                            .limit(1)
+                            .get()
+                            .await()
+                        val foundDoc = querySnapEmail.documents.firstOrNull()
+                        if (foundDoc != null) {
+                            val parsed = parseBusinessDoc(foundDoc)
+                            if (parsed != null) return parsed
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "findBusinessByOwner query ownerEmail note: ${e.message}")
                     }
                 }
-                if (cleanPhone.isNotBlank()) {
-                    // Check registered_phones index first
-                    try {
-                        val phoneDoc = firestore.collection("registered_phones").document(cleanPhone).get().await()
-                        if (phoneDoc.exists()) {
-                            val bizId = phoneDoc.getString("businessId")
-                            if (!bizId.isNullOrBlank()) {
-                                val bizDoc = firestore.collection("businesses").document(bizId).get().await()
-                                if (bizDoc.exists()) {
-                                    val parsed = parseBusinessDoc(bizDoc)
-                                    if (parsed != null) return parsed
+                if (localPhone.isNotBlank() || e164Phone.isNotBlank() || rawPhone.isNotBlank()) {
+                    val phoneCandidates = listOf(localPhone, e164Phone, rawPhone).distinct().filter { it.isNotBlank() }
+                    for (candidate in phoneCandidates) {
+                        try {
+                            val phoneDoc = firestore.collection("registered_phones").document(candidate).get().await()
+                            if (phoneDoc.exists()) {
+                                val bizId = phoneDoc.getString("businessId")
+                                if (!bizId.isNullOrBlank()) {
+                                    val bizDoc = firestore.collection("businesses").document(bizId).get().await()
+                                    if (bizDoc.exists()) {
+                                        val parsed = parseBusinessDoc(bizDoc)
+                                        if (parsed != null) return parsed
+                                    }
                                 }
                             }
+                        } catch (pe: Exception) {
+                            Log.w(TAG, "findBusinessByOwner registered_phones candidate $candidate note: ${pe.message}")
                         }
-                    } catch (pe: Exception) {
-                        Log.w(TAG, "findBusinessByOwner phoneDoc lookup note: ${pe.message}")
                     }
-                    val querySnapPhone = firestore.collection("businesses")
-                        .whereEqualTo("ownerPhone", cleanPhone)
-                        .limit(1)
-                        .get()
-                        .await()
-                    val foundDoc = querySnapPhone.documents.firstOrNull()
-                    if (foundDoc != null) {
-                        val parsed = parseBusinessDoc(foundDoc)
-                        if (parsed != null) return parsed
+                    // For authenticated store owners or Super Admins, check phone and ownerPhone fields
+                    for (phoneToTest in phoneCandidates) {
+                        try {
+                            val queryOwnerPhone = firestore.collection("businesses")
+                                .whereEqualTo("ownerPhone", phoneToTest)
+                                .limit(1)
+                                .get()
+                                .await()
+                            val foundDoc = queryOwnerPhone.documents.firstOrNull()
+                            if (foundDoc != null) {
+                                val parsed = parseBusinessDoc(foundDoc)
+                                if (parsed != null) return parsed
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "findBusinessByOwner query ownerPhone note: ${e.message}")
+                        }
+                        try {
+                            val queryPhone = firestore.collection("businesses")
+                                .whereEqualTo("phone", phoneToTest)
+                                .limit(1)
+                                .get()
+                                .await()
+                            val foundDoc = queryPhone.documents.firstOrNull()
+                            if (foundDoc != null) {
+                                val parsed = parseBusinessDoc(foundDoc)
+                                if (parsed != null) return parsed
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "findBusinessByOwner query phone field note: ${e.message}")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1189,13 +1236,16 @@ class SuperAdminRepository(
     }
 
     suspend fun registerNewShop(business: PlatformBusiness): Result<PlatformBusiness> {
-        val cleanPhone = business.ownerPhone.trim()
+        val rawPhone = business.ownerPhone.trim()
+        val localPhone = CloudBusinessAuth.normalizePhone(rawPhone)
+        val e164Phone = CloudBusinessAuth.normalizeToE164(rawPhone)
+        val effectivePhone = localPhone.ifBlank { rawPhone }
 
         if (isFirebaseConfigured()) {
             try {
                 val firestore = FirebaseFirestore.getInstance()
 
-                // 1. Write the main business registration document directly to central Cloud Firestore
+                // 1. Prepare business document data with backward-compatible phone and ownerPhone fields
                 val data = mutableMapOf<String, Any?>(
                     "id" to business.id,
                     "name" to business.businessName,
@@ -1203,8 +1253,8 @@ class SuperAdminRepository(
                     "ownerUid" to business.ownerUid,
                     "ownerName" to business.ownerName,
                     "ownerEmail" to business.ownerEmail.trim().lowercase(),
-                    "ownerPhone" to cleanPhone,
-                    "phone" to cleanPhone,
+                    "ownerPhone" to effectivePhone,
+                    "phone" to effectivePhone,
                     "status" to business.status.name,
                     "statusReason" to business.statusReason,
                     "planId" to business.planId,
@@ -1231,28 +1281,33 @@ class SuperAdminRepository(
                     data["scheduledPolicyEffectiveAt"] = business.scheduledPolicyEffectiveAt
                 }
 
-                val writeSuccess = kotlinx.coroutines.withTimeoutOrNull(20000L) {
-                    firestore.collection("businesses").document(business.id)
-                        .set(data, SetOptions.merge()).await()
+                // 2. Prepare phone indexing data
+                val phoneDocData = mapOf(
+                    "phone" to effectivePhone,
+                    "businessId" to business.id,
+                    "businessName" to business.businessName,
+                    "ownerName" to business.ownerName,
+                    "ownerUid" to business.ownerUid,
+                    "createdAt" to business.createdAt,
+                    "updatedAt" to System.currentTimeMillis()
+                )
 
-                    // 2. Index the registered phone in registered_phones collection for cross-device duplicate detection
-                    if (cleanPhone.isNotBlank()) {
-                        val phoneDocData = mapOf(
-                            "phone" to cleanPhone,
-                            "businessId" to business.id,
-                            "businessName" to business.businessName,
-                            "ownerName" to business.ownerName,
-                            "ownerUid" to business.ownerUid,
-                            "createdAt" to business.createdAt,
-                            "updatedAt" to System.currentTimeMillis()
-                        )
-                        try {
-                            firestore.collection("registered_phones").document(cleanPhone)
-                                .set(phoneDocData, SetOptions.merge()).await()
-                        } catch (pe: Exception) {
-                            Log.w(TAG, "registered_phones indexing non-fatal: ${pe.message}")
+                // 3. Atomically write the business doc AND the phone index via WriteBatch
+                val writeSuccess = kotlinx.coroutines.withTimeoutOrNull(20000L) {
+                    val batch = firestore.batch()
+                    val bizDocRef = firestore.collection("businesses").document(business.id)
+                    batch.set(bizDocRef, data, SetOptions.merge())
+
+                    if (effectivePhone.isNotBlank()) {
+                        val localPhoneRef = firestore.collection("registered_phones").document(effectivePhone)
+                        batch.set(localPhoneRef, phoneDocData, SetOptions.merge())
+                        if (e164Phone.isNotBlank() && e164Phone != effectivePhone) {
+                            val e164PhoneRef = firestore.collection("registered_phones").document(e164Phone)
+                            batch.set(e164PhoneRef, phoneDocData, SetOptions.merge())
                         }
                     }
+
+                    batch.commit().await()
                     true
                 }
                 if (writeSuccess == null) {
@@ -1262,7 +1317,8 @@ class SuperAdminRepository(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "registerNewShop server save failed: ${e.message}", e)
-                return Result.failure(e)
+                val translatedError = translateRegistrationError(e)
+                return Result.failure(Exception(translatedError, e))
             }
         }
 
@@ -1294,6 +1350,19 @@ class SuperAdminRepository(
         } catch (_: Exception) {}
 
         return Result.success(business)
+    }
+
+    private fun translateRegistrationError(e: Throwable): String {
+        val msg = e.localizedMessage ?: e.message ?: ""
+        return when {
+            msg.contains("PERMISSION_DENIED", ignoreCase = true) ->
+                "ফায়ারবেস ক্লাউড অনুমতি ত্রুটি (PERMISSION_DENIED): আপনার গুগল বা মোবাইল একাউন্টে দোকান নিবন্ধনের উপযুক্ত পারমিশন পাওয়া যায়নি। অনুগ্রহ করে সাইন-ইন যাচাই করে পুনরায় চেষ্টা করুন।"
+            msg.contains("UNAVAILABLE", ignoreCase = true) || msg.contains("network", ignoreCase = true) ->
+                "নেটওয়ার্ক সংযোগ বিচ্ছিন্ন! অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।"
+            msg.contains("ALREADY_EXISTS", ignoreCase = true) ->
+                "এই মোবাইল নম্বর বা আইডি দিয়ে ইতিমধ্যে একটি দোকান নিবন্ধিত রয়েছে।"
+            else -> "সার্ভারে দোকান সংরক্ষণ ব্যর্থ হয়েছে: $msg"
+        }
     }
 
     fun updateOwnerEmailForShop(shopId: String, email: String, uid: String? = null) {

@@ -230,11 +230,15 @@ service cloud.firestore {
     }
 
     function isInitialShopCompletion(existingData, incomingData, businessId) {
-      return (!('ownerPhone' in existingData) || !('phone' in existingData) || !('status' in existingData) || !('address' in existingData)) &&
+      return (
+               (!('ownerPhone' in existingData) || !('phone' in existingData) || !('status' in existingData) || !('address' in existingData)) ||
+               (existingData.ownerUid == request.auth.uid && existingData.status in ['PENDING', 'ACTIVE'])
+             ) &&
              isValidNewShopRegistration(incomingData, businessId) &&
              (!('planId' in incomingData) || incomingData.planId in ['plan_free', 'free', 'basic', 'default']) &&
              (!('status' in incomingData) || incomingData.status in ['PENDING', 'ACTIVE']) &&
-             (!('subscriptionStatus' in incomingData) || incomingData.subscriptionStatus in ['PENDING', 'ACTIVE', 'TRIAL']);
+             (!('subscriptionStatus' in incomingData) || incomingData.subscriptionStatus in ['PENDING', 'ACTIVE', 'TRIAL']) &&
+             (!('ownerUid' in incomingData) || incomingData.ownerUid == existingData.ownerUid);
     }
 
     // Business Scope Root
@@ -248,7 +252,17 @@ service cloud.firestore {
       ));
       allow list: if isSuperAdmin() || (isSignedIn() && (
         resource.data.ownerUid == request.auth.uid ||
-        (request.auth.token.email != null && 'ownerEmail' in resource.data && resource.data.ownerEmail == request.auth.token.email.lower())
+        (request.auth.token.email != null && 'ownerEmail' in resource.data && resource.data.ownerEmail == request.auth.token.email.lower()) ||
+        (request.auth.token.phone_number != null && (
+          ('ownerPhone' in resource.data && (
+            resource.data.ownerPhone == request.auth.token.phone_number ||
+            ('+88' + resource.data.ownerPhone) == request.auth.token.phone_number
+          )) ||
+          ('phone' in resource.data && (
+            resource.data.phone == request.auth.token.phone_number ||
+            ('+88' + resource.data.phone) == request.auth.token.phone_number
+          ))
+        ))
       ));
       allow create: if isSuperAdmin() || (
         isSignedIn() && (
@@ -352,17 +366,23 @@ service cloud.firestore {
       allow get: if isSuperAdmin() || (isSignedIn() && (
         resource.data.ownerUid == request.auth.uid ||
         resource.data.businessId == request.auth.uid ||
-        isBusinessOwner(resource.data.businessId)
+        isBusinessOwner(resource.data.businessId) ||
+        (request.auth.token.phone_number != null && (
+          request.auth.token.phone_number == phone ||
+          request.auth.token.phone_number == '+88' + phone ||
+          ('+88' + phone) == request.auth.token.phone_number
+        ))
       ));
       allow list: if isSuperAdmin();
       allow create: if isSignedIn() && phone.size() >= 5 && phone.size() <= 30 &&
                        incoming().phone == phone && incoming().businessId is string &&
                        (isSuperAdmin() || incoming().businessId == request.auth.uid || incoming().ownerUid == request.auth.uid || isBusinessOwner(incoming().businessId)) &&
-                       !exists(/databases/$(database)/documents/registered_phones/$(phone));
+                       (!exists(/databases/$(database)/documents/registered_phones/$(phone)) ||
+                        get(/databases/$(database)/documents/registered_phones/$(phone)).data.ownerUid == request.auth.uid);
       allow update: if isSuperAdmin() || (
         isSignedIn() && phone.size() >= 5 && phone.size() <= 30 &&
         incoming().phone == phone && incoming().businessId is string &&
-        (incoming().businessId == request.auth.uid || incoming().ownerUid == request.auth.uid || isBusinessOwner(incoming().businessId))
+        (incoming().businessId == request.auth.uid || incoming().ownerUid == request.auth.uid || isBusinessOwner(incoming().businessId) || resource.data.ownerUid == request.auth.uid)
       );
       allow delete: if isSuperAdmin();
     }

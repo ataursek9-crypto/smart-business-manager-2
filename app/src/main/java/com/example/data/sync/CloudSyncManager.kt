@@ -427,14 +427,23 @@ class CloudSyncManager(
             }
 
             // 2c. Query by phone if available
-            val phone = authUser.phoneNumber?.trim() ?: ""
-            if (phone.isNotBlank()) {
-                val phoneDoc = firestore.collection("registered_phones").document(phone).get().awaitResult()
-                if (phoneDoc.exists()) {
-                    val foundBizId = phoneDoc.getString("businessId")
-                    if (!foundBizId.isNullOrBlank()) {
-                        CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
-                        return foundBizId
+            val rawPhone = authUser.phoneNumber?.trim() ?: ""
+            if (rawPhone.isNotBlank()) {
+                val localPhone = CloudBusinessAuth.normalizePhone(rawPhone)
+                val e164Phone = CloudBusinessAuth.normalizeToE164(rawPhone)
+                val phonesToSearch = listOf(rawPhone, localPhone, e164Phone).distinct().filter { it.isNotBlank() }
+                for (p in phonesToSearch) {
+                    try {
+                        val phoneDoc = firestore.collection("registered_phones").document(p).get().awaitResult()
+                        if (phoneDoc.exists()) {
+                            val foundBizId = phoneDoc.getString("businessId")
+                            if (!foundBizId.isNullOrBlank()) {
+                                CloudBusinessAuth.setStoredBusinessId(context, foundBizId, role = UserRole.ADMIN.name)
+                                return foundBizId
+                            }
+                        }
+                    } catch (pe: Exception) {
+                        Log.w(TAG, "resolveOrFetchBusinessId phone lookup note for $p: ${pe.message}")
                     }
                 }
             }
@@ -605,21 +614,30 @@ class CloudSyncManager(
         }
     }
 
-    suspend fun ensureBusinessDocExists(businessId: String, authUid: String, businessName: String = "স্মার্ট বিজনেস") {
+    suspend fun ensureBusinessDocExists(businessId: String, authUid: String, businessName: String = "স্মার্ট বিজনেস", phone: String = "") {
         if (businessId.isBlank() || authUid.isBlank() || businessId == "admin_1" || businessId == "salesman_1") return
         try {
             val firestore = FirebaseFirestore.getInstance()
             val bizRef = firestore.collection("businesses").document(businessId)
             val snapshot = bizRef.get().awaitResult()
+            val cleanPhone = if (phone.isNotBlank()) CloudBusinessAuth.normalizePhone(phone) else (db.companySettingsDao().getSettings()?.phone?.let { CloudBusinessAuth.normalizePhone(it) } ?: "")
             if (!snapshot.exists()) {
-                val bizData = mapOf(
+                val bizData = mutableMapOf<String, Any>(
                     "id" to businessId,
                     "ownerUid" to authUid,
                     "businessName" to businessName,
                     "name" to businessName,
+                    "status" to "PENDING",
+                    "planId" to "plan_free",
+                    "planName" to "সম্পূর্ণ ফ্রি ব্যবহার",
+                    "subscriptionStatus" to "TRIAL",
                     "createdAt" to System.currentTimeMillis(),
                     "updatedAt" to System.currentTimeMillis()
                 )
+                if (cleanPhone.isNotBlank()) {
+                    bizData["ownerPhone"] = cleanPhone
+                    bizData["phone"] = cleanPhone
+                }
                 bizRef.set(bizData, SetOptions.merge()).awaitResult()
                 Log.i(TAG, "Created root business doc: /businesses/$businessId with owner: $authUid")
             } else {
@@ -628,6 +646,10 @@ class CloudSyncManager(
                 if (existingOwner.isNullOrBlank()) {
                     updates["ownerUid"] = authUid
                     Log.i(TAG, "Updated root business doc ownerUid on /businesses/$businessId: $authUid")
+                }
+                if (cleanPhone.isNotBlank() && snapshot.getString("ownerPhone").isNullOrBlank()) {
+                    updates["ownerPhone"] = cleanPhone
+                    updates["phone"] = cleanPhone
                 }
                 bizRef.set(updates, SetOptions.merge()).awaitResult()
             }
@@ -1974,8 +1996,16 @@ object CloudBusinessAuth {
         editor.apply()
     }
 
+    fun convertBengaliDigits(raw: String): String {
+        return raw.trim()
+            .replace('০', '0').replace('১', '1').replace('২', '2')
+            .replace('৩', '3').replace('৪', '4').replace('৫', '5')
+            .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
+    }
+
     fun normalizePhone(raw: String): String {
-        val digits = raw.replace(Regex("[^0-9+]"), "").trim()
+        val converted = convertBengaliDigits(raw)
+        val digits = converted.replace(Regex("[^0-9+]"), "").trim()
         return when {
             digits.startsWith("+880") -> "0" + digits.substring(4)
             digits.startsWith("880") -> "0" + digits.substring(3)
@@ -1984,6 +2014,29 @@ object CloudBusinessAuth {
             digits.length == 10 && digits.startsWith("1") -> "0$digits"
             else -> digits
         }
+    }
+
+    fun normalizeToE164(raw: String): String {
+        val local = normalizePhone(raw)
+        return when {
+            local.startsWith("+880") -> local
+            local.startsWith("01") && local.length == 11 -> "+88$local"
+            local.startsWith("1") && local.length == 10 -> "+880$local"
+            local.startsWith("+") -> local
+            else -> if (local.isNotBlank()) "+880$local" else ""
+        }
+    }
+
+    fun matchesPhone(phone1: String, phone2: String): Boolean {
+        val p1 = normalizePhone(phone1)
+        val p2 = normalizePhone(phone2)
+        if (p1.isNotBlank() && p1 == p2) return true
+        val e1 = normalizeToE164(phone1)
+        val e2 = normalizeToE164(phone2)
+        if (e1.isNotBlank() && e1 == e2) return true
+        val last10_1 = p1.takeLast(10)
+        val last10_2 = p2.takeLast(10)
+        return last10_1.length == 10 && last10_1 == last10_2
     }
 
     fun setStoredRole(context: Context, role: String?) {

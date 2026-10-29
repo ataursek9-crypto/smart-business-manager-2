@@ -1156,24 +1156,7 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     else -> "biz_${System.currentTimeMillis()}_${(1000..9999).random()}"
                 }
 
-                val repoResult = repository.registerNewShop(
-                    shopName = shopName,
-                    ownerName = ownerName,
-                    phone = normalizedPhone,
-                    address = address,
-                    district = district,
-                    businessType = businessType,
-                    pin = normalizedPin,
-                    shopId = shopId
-                )
-
-                if (repoResult.isFailure) {
-                    onResult(false, repoResult.exceptionOrNull()?.message ?: "নিবন্ধন ব্যর্থ হয়েছে!", null)
-                    return@launch
-                }
-
-                val (newAdmin, _) = repoResult.getOrThrow()
-                val effectiveAuthUid = if (effectiveOwnerUid.isNotBlank()) effectiveOwnerUid else newAdmin.id
+                val effectiveAuthUid = if (effectiveOwnerUid.isNotBlank()) effectiveOwnerUid else "admin_${System.currentTimeMillis()}"
 
                 val platformBiz = PlatformBusiness(
                     id = shopId,
@@ -1200,14 +1183,34 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                     notes = "নতুন দোকানদার স্ব-নিবন্ধন (সুপার এডমিন অনুমোদনের অপেক্ষায়)"
                 )
 
-                // Register into SuperAdminRepository and sync directly to Cloud Firestore backend
+                // 1. Register with SuperAdminRepository (and Cloud Firestore when configured).
+                // Cloud registration must succeed before Room persistence to prevent orphaned local accounts.
                 val cloudResult = superAdminRepo.registerNewShop(platformBiz)
-                if (cloudResult.isFailure && superAdminRepo.isFirebaseConfigured()) {
+                if (cloudResult.isFailure) {
                     val err = cloudResult.exceptionOrNull()
                     val errorMsg = "সার্ভারে দোকান সংরক্ষণ ব্যর্থ হয়েছে! অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন (${err?.localizedMessage ?: "ক্লাউড সংরক্ষণ ত্রুটি"})"
                     onResult(false, errorMsg, null)
                     return@launch
                 }
+
+                // 2. Now persist safely to local Room database
+                val repoResult = repository.registerNewShop(
+                    shopName = shopName,
+                    ownerName = ownerName,
+                    phone = normalizedPhone,
+                    address = address,
+                    district = district,
+                    businessType = businessType,
+                    pin = normalizedPin,
+                    shopId = shopId
+                )
+
+                if (repoResult.isFailure) {
+                    onResult(false, repoResult.exceptionOrNull()?.message ?: "স্থানীয় ডাটাবেজে সংরক্ষণ ব্যর্থ হয়েছে!", null)
+                    return@launch
+                }
+
+                val (newAdmin, _) = repoResult.getOrThrow()
 
                 // Link Google credentials if provided
                 if (effectiveAuthUid.isNotBlank() || ownerEmail.isNotBlank()) {
@@ -1289,12 +1292,24 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                 val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
                 val cloudBiz = superAdminRepo.findBusinessByOwner("", "", cleanPhone)
                 if (cloudBiz != null) {
+                    var cloudPinHash = ""
+                    try {
+                        if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                            val staffDoc = FirebaseFirestore.getInstance()
+                                .collection("businesses").document(cloudBiz.id)
+                                .collection("staff").document(cloudBiz.ownerUid).get().await()
+                            if (staffDoc.exists()) {
+                                cloudPinHash = staffDoc.getString("pinHash") ?: ""
+                            }
+                        }
+                    } catch (_: Exception) {}
+
                     val adminUser = User(
                         id = cloudBiz.ownerUid.ifBlank { "admin_${System.currentTimeMillis()}" },
                         name = cloudBiz.ownerName.ifBlank { "দোকান মালিক" },
                         phone = cleanPhone,
                         role = UserRole.ADMIN,
-                        pinHash = repository.hashPin("1234"),
+                        pinHash = cloudPinHash,
                         isActive = true,
                         accountStatus = UserAccountStatus.ACTIVE,
                         shopId = cloudBiz.id
@@ -1344,6 +1359,110 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
             )
             _activeBusinessId.value = bizId
             _currentUser.value = user
+
+            syncManager.startProductsRealtimeListener()
+            triggerSync()
+
+            onResult(true, "মোবাইল ওটিপি যাচাই সফল! স্বাগতম, ${user.name}!", user)
+        }
+    }
+
+    /**
+     * Authenticates a user after genuine Firebase Phone Auth SMS verification.
+     * Restores cloud shop profile safely without dummy passwords or insecure defaults.
+     */
+    fun loginWithVerifiedPhoneUser(
+        firebaseUser: com.google.firebase.auth.FirebaseUser,
+        onResult: (Boolean, String, User?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val rawPhone = firebaseUser.phoneNumber ?: ""
+            val cleanPhone = CloudBusinessAuth.normalizePhone(rawPhone)
+            val uid = firebaseUser.uid
+
+            if (cleanPhone.isBlank()) {
+                onResult(false, "ফোন নম্বর পাওয়া যায়নি!", null)
+                return@launch
+            }
+
+            var user = repository.getUserByPhone(cleanPhone)
+            if (user == null && uid.isNotBlank()) {
+                user = repository.getUserById(uid)
+            }
+
+            val superAdminRepo = SuperAdminRepository.getInstance(getApplication())
+            val cloudBiz = superAdminRepo.findBusinessByOwner(uid, "", cleanPhone)
+
+            if (user == null && cloudBiz != null) {
+                var cloudPinHash = ""
+                try {
+                    if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                        val staffDoc = FirebaseFirestore.getInstance()
+                            .collection("businesses").document(cloudBiz.id)
+                            .collection("staff").document(uid).get().await()
+                        if (staffDoc.exists()) {
+                            cloudPinHash = staffDoc.getString("pinHash") ?: ""
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                val adminUser = User(
+                    id = if (cloudBiz.ownerUid.isNotBlank()) cloudBiz.ownerUid else uid,
+                    name = cloudBiz.ownerName.ifBlank { "দোকান মালিক" },
+                    phone = cleanPhone,
+                    role = UserRole.ADMIN,
+                    pinHash = cloudPinHash,
+                    isActive = true,
+                    accountStatus = UserAccountStatus.ACTIVE,
+                    shopId = cloudBiz.id
+                )
+                repository.saveUserDirect(adminUser)
+                val settings = CompanySettings(
+                    id = 1,
+                    businessName = cloudBiz.businessName,
+                    phone = cleanPhone,
+                    address = cloudBiz.address.ifBlank { cloudBiz.district.ifBlank { "বাংলাদেশ" } }
+                )
+                repository.saveCompanySettingsDirect(settings)
+                user = adminUser
+            }
+
+            if (user == null) {
+                onResult(false, "এই মোবাইল নম্বরে কোনো সক্রিয় দোকান অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে নতুন দোকান নিবন্ধন করুন।", null)
+                return@launch
+            }
+
+            if (!user.isActive || user.accountStatus != UserAccountStatus.ACTIVE) {
+                _currentUser.value = null
+                onResult(false, "আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত বা নিষ্ক্রিয় করা হয়েছে।", null)
+                return@launch
+            }
+
+            _isSuperAdminSession.value = false
+            _superAdminVerifiedEmail.value = null
+            _superAdminUid.value = null
+            _currentGoogleEmail.value = null
+            CloudBusinessAuth.setStoredSuperAdminFlag(getApplication(), false)
+            CloudBusinessAuth.setStoredAuthEmail(getApplication(), null)
+            CloudBusinessAuth.setStoredRole(getApplication(), user.role.name)
+
+            val targetShopId = user.shopId.ifBlank { cloudBiz?.id ?: "" }
+            if (targetShopId.isNotBlank()) {
+                CloudBusinessAuth.setStoredBusinessId(
+                    context = getApplication(),
+                    businessId = targetShopId,
+                    businessName = cloudBiz?.businessName ?: "দোকান",
+                    role = user.role.name
+                )
+                _activeBusinessId.value = targetShopId
+            }
+
+            _currentUser.value = user
+            try {
+                if (targetShopId.isNotBlank()) {
+                    syncManager.ensureStaffLinked(targetShopId, uid, cleanPhone, user.name, user.role.name)
+                }
+            } catch (_: Exception) {}
 
             syncManager.startProductsRealtimeListener()
             triggerSync()
@@ -1602,12 +1721,24 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                         resolvedUser = repository.getUserById(matchedBiz.ownerUid)
                     }
                     if (resolvedUser == null) {
+                        var cloudPinHash = ""
+                        try {
+                            if (FirebaseApp.getApps(getApplication()).isNotEmpty()) {
+                                val staffDoc = FirebaseFirestore.getInstance()
+                                    .collection("businesses").document(matchedBiz.id)
+                                    .collection("staff").document(uid).get().await()
+                                if (staffDoc.exists()) {
+                                    cloudPinHash = staffDoc.getString("pinHash") ?: ""
+                                }
+                            }
+                        } catch (_: Exception) {}
+
                         val adminUser = User(
                             id = uid,
                             name = matchedBiz.ownerName.ifBlank { name },
                             phone = matchedBiz.ownerPhone.ifBlank { "01700000000" },
                             role = UserRole.ADMIN,
-                            pinHash = repository.hashPin("1234"),
+                            pinHash = cloudPinHash,
                             isActive = true,
                             accountStatus = UserAccountStatus.ACTIVE,
                             shopId = matchedBiz.id
@@ -1651,12 +1782,21 @@ class BusinessViewModel(application: Application) : AndroidViewModel(application
                             if (!bizId.isNullOrBlank() && isActive) {
                                 val role = if (roleStr == "ADMIN") UserRole.ADMIN else UserRole.SALESMAN
                                 resolvedShopId = bizId
+                                var staffPinHash = ""
+                                try {
+                                    val staffDoc = firestore.collection("businesses").document(bizId)
+                                        .collection("staff").document(uid).get().await()
+                                    if (staffDoc.exists()) {
+                                        staffPinHash = staffDoc.getString("pinHash") ?: ""
+                                    }
+                                } catch (_: Exception) {}
+
                                 val staffUser = User(
                                     id = uid,
                                     name = name,
                                     phone = phone.ifBlank { "01800000000" },
                                     role = role,
-                                    pinHash = repository.hashPin("1234"),
+                                    pinHash = staffPinHash,
                                     isActive = true,
                                     accountStatus = UserAccountStatus.ACTIVE,
                                     shopId = bizId

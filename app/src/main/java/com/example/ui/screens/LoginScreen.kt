@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.User
 import com.example.data.storage.SavedAccount
 import com.example.util.GoogleSignInHelper
+import com.example.util.PhoneAuthHelper
 import com.example.viewmodel.BusinessViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,6 +75,9 @@ fun LoginScreen(
     var isOtpMode by remember { mutableStateOf(false) }
     var otpCode by remember { mutableStateOf("") }
     var otpSentNotice by remember { mutableStateOf("") }
+    var verificationId by remember { mutableStateOf("") }
+    var resendToken by remember { mutableStateOf<com.google.firebase.auth.PhoneAuthProvider.ForceResendingToken?>(null) }
+    var isSendingOtp by remember { mutableStateOf(false) }
 
     // Tab state: 0 = Mobile, 1 = Google
     var selectedLoginTab by remember { mutableStateOf(0) }
@@ -155,7 +159,7 @@ fun LoginScreen(
             },
             onCancelled = {
                 isGoogleLoading = false
-                googleStatusMessage = "গুগল সাইন-ইন বাতিল করা হয়েছে।"
+                googleStatusMessage = ""
             },
             onError = { err ->
                 isGoogleLoading = false
@@ -620,7 +624,7 @@ fun LoginScreen(
                                     otpCode = it
                                     errorMessage = ""
                                 },
-                                placeholder = { Text("৪ ডিজিটের ওটিপি (1234)", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
+                                placeholder = { Text("৬ ডিজিটের এসএমএস ওটিপি", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
                                 leadingIcon = {
                                     Icon(Icons.Default.Lock, contentDescription = null, tint = primaryBlue, modifier = Modifier.size(20.dp))
                                 },
@@ -639,21 +643,62 @@ fun LoginScreen(
                             Button(
                                 onClick = {
                                     val trimmedPhone = phone.trim()
-                                    if (trimmedPhone.length < 11) {
-                                        errorMessage = "ওটিপি পাঠানোর জন্য সঠিক মোবাইল নম্বর দিন"
+                                    val e164 = PhoneAuthHelper.normalizeToE164(trimmedPhone)
+                                    if (!PhoneAuthHelper.isValidBangladeshPhone(e164)) {
+                                        errorMessage = "ওটিপি পাঠানোর জন্য সঠিক ১১ ডিজিটের মোবাইল নম্বর দিন (যেমন: 017XXXXXXXX)"
                                     } else {
-                                        otpSentNotice = "আপনার নম্বরে ৪ ডিজিটের ওটিপি পাঠানো হয়েছে: 1234"
-                                        otpCode = "1234"
-                                        errorMessage = ""
+                                        val activity = context as? android.app.Activity
+                                        if (activity == null) {
+                                            errorMessage = "অ্যাক্টিভিটি প্রস্তুত নয়, অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।"
+                                        } else {
+                                            isSendingOtp = true
+                                            errorMessage = ""
+                                            otpSentNotice = "ওটিপি কোড পাঠানো হচ্ছে..."
+                                            PhoneAuthHelper.sendVerificationCode(
+                                                activity = activity,
+                                                phone = e164,
+                                                forceResendingToken = resendToken,
+                                                onCodeSent = { id, token ->
+                                                    isSendingOtp = false
+                                                    verificationId = id
+                                                    resendToken = token
+                                                    otpSentNotice = "আপনার নম্বরে ৬ ডিজিটের ভেরিফিকেশন কোড (SMS) পাঠানো হয়েছে।"
+                                                },
+                                                onAutoVerified = { user ->
+                                                    isSendingOtp = false
+                                                    otpSentNotice = "মোবাইল নম্বর স্বয়ংক্রিয়ভাবে যাচাই সম্পন্ন হয়েছে!"
+                                                    viewModel.loginWithVerifiedPhoneUser(user) { success, msg, _ ->
+                                                        if (success) {
+                                                            if (rememberThisPhone) {
+                                                                viewModel.saveRememberedPhone(trimmedPhone)
+                                                            }
+                                                            onLoginSuccess()
+                                                        } else {
+                                                            errorMessage = msg
+                                                        }
+                                                    }
+                                                },
+                                                onError = { err ->
+                                                    isSendingOtp = false
+                                                    otpSentNotice = ""
+                                                    errorMessage = err
+                                                }
+                                            )
+                                        }
                                     }
                                 },
+                                enabled = !isSendingOtp && phone.trim().length >= 11,
                                 modifier = Modifier
                                     .height(52.dp)
                                     .testTag("send_otp_button"),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = primaryBlue)
                             ) {
-                                Text("ওটিপি পাঠান", fontSize = 12.sp)
+                                if (isSendingOtp) {
+                                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("ওটিপি পাঠান", fontSize = 12.sp)
+                                }
                             }
                         }
 
@@ -811,17 +856,48 @@ fun LoginScreen(
                             googleStatusMessage = ""
 
                             if (isOtpMode) {
-                                viewModel.loginWithPhoneOtp(trimmedPhone, trimmedOtp) { success, msg, _ ->
-                                    isLoading = false
-                                    if (success) {
-                                        if (rememberThisPhone) {
-                                            viewModel.saveRememberedPhone(trimmedPhone)
-                                        } else {
-                                            viewModel.removeRememberedPhone(trimmedPhone)
+                                val cleanOtp = otpCode.trim()
+                                    .replace('০', '0').replace('১', '1').replace('২', '2')
+                                    .replace('৩', '3').replace('৪', '4').replace('৫', '5')
+                                    .replace('৬', '6').replace('৭', '7').replace('৮', '8').replace('৯', '9')
+
+                                if (verificationId.isNotBlank()) {
+                                    PhoneAuthHelper.verifyCodeAndSignIn(
+                                        verificationId = verificationId,
+                                        code = cleanOtp,
+                                        onSuccess = { user ->
+                                            viewModel.loginWithVerifiedPhoneUser(user) { success, msg, _ ->
+                                                isLoading = false
+                                                if (success) {
+                                                    if (rememberThisPhone) {
+                                                        viewModel.saveRememberedPhone(trimmedPhone)
+                                                    } else {
+                                                        viewModel.removeRememberedPhone(trimmedPhone)
+                                                    }
+                                                    onLoginSuccess()
+                                                } else {
+                                                    errorMessage = msg
+                                                }
+                                            }
+                                        },
+                                        onError = { err ->
+                                            isLoading = false
+                                            errorMessage = err
                                         }
-                                        onLoginSuccess()
-                                    } else {
-                                        errorMessage = msg
+                                    )
+                                } else {
+                                    viewModel.loginWithPhoneOtp(trimmedPhone, cleanOtp) { success, msg, _ ->
+                                        isLoading = false
+                                        if (success) {
+                                            if (rememberThisPhone) {
+                                                viewModel.saveRememberedPhone(trimmedPhone)
+                                            } else {
+                                                viewModel.removeRememberedPhone(trimmedPhone)
+                                            }
+                                            onLoginSuccess()
+                                        } else {
+                                            errorMessage = msg
+                                        }
                                     }
                                 }
                             } else {
@@ -1298,7 +1374,7 @@ fun LoginScreen(
                         color = textSecondary
                     )
                     Text(
-                        text = "৩. ওটিপি (OTP) মোড ব্যবহার করে ৪ ডিজিটের ওটিপি দিয়েও লগইন করতে পারেন।",
+                        text = "৩. এসএমএস ওটিপি (SMS OTP) মোড ব্যবহার করে সরাসরি ডিভাইসে আসা কোড দিয়েও লগইন করতে পারেন।",
                         style = MaterialTheme.typography.bodySmall,
                         color = textSecondary
                     )
