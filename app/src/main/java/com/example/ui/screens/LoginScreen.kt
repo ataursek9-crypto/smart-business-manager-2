@@ -160,10 +160,12 @@ fun LoginScreen(
             onCancelled = {
                 isGoogleLoading = false
                 googleStatusMessage = ""
+                selectedLoginTab = 0
             },
             onError = { err ->
                 isGoogleLoading = false
                 googleStatusMessage = err
+                selectedLoginTab = 0
             }
         )
     }
@@ -1050,6 +1052,62 @@ fun LoginScreen(
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        val act = GoogleSignInHelper.findActivity(context)
+                                        if (act != null) {
+                                            isGoogleLoading = true
+                                            googleStatusMessage = ""
+                                            GoogleSignInHelper.launchFirebaseOAuthFallback(
+                                                activity = act,
+                                                onAuthSuccess = { fUser ->
+                                                    viewModel.handleGoogleSignInSuccess(fUser) { success, msg, _ ->
+                                                        isGoogleLoading = false
+                                                        if (success) {
+                                                            onLoginSuccess()
+                                                        } else {
+                                                            selectedLoginTab = 0
+                                                            googleStatusMessage = msg
+                                                            pendingGoogleUser = fUser
+                                                            linkBusinessIdInput = viewModel.getActiveBusinessId()
+                                                            linkPhoneInput = phone.ifBlank { "" }
+                                                            linkPinInput = ""
+                                                            linkErrorMessage = ""
+                                                        }
+                                                    }
+                                                },
+                                                onCancelled = {
+                                                    isGoogleLoading = false
+                                                    selectedLoginTab = 0
+                                                },
+                                                onError = { err ->
+                                                    isGoogleLoading = false
+                                                    googleStatusMessage = err
+                                                    selectedLoginTab = 0
+                                                }
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(38.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = primaryBlue),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Language,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "🌐 বিকল্প পদ্ধতিতে গুগল সাইন-ইন (Web)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedButton(
                                     onClick = { showGoogleDiagDialog = true },
                                     modifier = Modifier.fillMaxWidth().height(36.dp),
